@@ -81,6 +81,8 @@ class Generator():
         # complete information about them.
         self._blacklisted_classes: set = set()
 
+        self.inline_functions: set = set()
+
     ### Entry Point Generators ###
 
     def generate(self, context=None) -> ast.Program:
@@ -238,6 +240,9 @@ class Generator():
         nested_function = (len(self.namespace) > 1 and
                            self.namespace[-2] != 'global' and
                            self.namespace[-2][0].islower())
+        is_inline = (not abstract and
+                     not nested_function and
+                     not (class_method and not class_is_final))
 
         prev_inside_java_lamdba = self._inside_java_lambda
         self._inside_java_lambda = nested_function and self.language == "java"
@@ -291,6 +296,7 @@ class Generator():
                        if class_method
                        else ast.FunctionDeclaration.FUNCTION),
             is_final=not can_override,
+            is_inline=is_inline,
             inferred_type=None,
             type_parameters=type_params,
         )
@@ -298,8 +304,10 @@ class Generator():
         for p in params:
             self.context.add_var(self.namespace, p.name, p)
 
+        if func.is_inline:
+            self.inline_functions.add(func)
         if func.body is not None:
-            body = self._gen_func_body(ret_type)
+            body = self._gen_func_body(ret_type, func)
         func.body = body
 
         self._inside_java_lambda = prev_inside_java_lamdba
@@ -1494,6 +1502,23 @@ class Generator():
         """
         log(self.logger, "Generating function call of type {}".format(etype))
         funcs = self._get_matching_function_declarations(etype, subtype)
+
+        initial_namespace = self.namespace
+        rand_func = None
+        func = None
+        while not func and funcs:
+            rand_func = ut.random.choice(funcs)
+            func = rand_func.attr_decl
+
+            # Check for recursive calls of inline functions
+            if isinstance(func, ast.FunctionDeclaration) and func.is_inline:
+                for cur_namespace in initial_namespace:
+                    if cur_namespace == func.name:
+                        if len(funcs) == 1:
+                            funcs = []
+                            break
+                        funcs.remove(rand_func)
+                        func = None
         if not funcs:
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
@@ -1511,11 +1536,11 @@ class Generator():
             )
             funcs.append(gu.AttrReceiverInfo(receiver, type_fun.receiver_inst,
                          type_fun.attr_decl, type_fun.attr_inst))
+            rand_func = ut.random.choice(funcs)
+            func = rand_func.attr_decl
 
-        rand_func = ut.random.choice(funcs)
         receiver = rand_func.receiver_expr
         params_map = rand_func.receiver_inst
-        func = rand_func.attr_decl
         func_type_map = rand_func.attr_inst
 
         params_map.update(func_type_map or {})
@@ -2247,7 +2272,7 @@ class Generator():
             # is an array of something.
             return param.get_type().name == 'Array'
 
-    def _gen_func_body(self, ret_type: tp.Type):
+    def _gen_func_body(self, ret_type: tp.Type, func: ast.FunctionDeclaration = None):
         """Generate the body of a function or a lambda.
 
         Args:
@@ -2272,13 +2297,13 @@ class Generator():
             body = expr if ut.random.bool(cfg.prob.function_expr) else \
                 ast.Block([expr])
         else:
-            exprs, decls = self._gen_side_effects()
+            exprs, decls = self._gen_side_effects(func)
             body = ast.Block(decls + exprs + [expr])
         return body
 
     # Where
 
-    def _gen_side_effects(self) -> Tuple[List[ast.Expr], List[ast.Declaration]]:
+    def _gen_side_effects(self, func: ast.FunctionDeclaration = None) -> Tuple[List[ast.Expr], List[ast.Declaration]]:
         """Generate expressions with side-effects for function bodies.
 
         Example side-effects: assignment, variable declaration, etc.
@@ -2541,8 +2566,13 @@ class Generator():
             # as function references.
             signature
         )
+        initial_namespace = self.namespace
+        for f in self.inline_functions:
+            for cur_namespace in initial_namespace:
+                if f.name == cur_namespace:
+                    gen_method = True
+                    break
         if not gen_method:
-            initial_namespace = self.namespace
             # If the given type 'etype' is a type parameter, then the
             # function we want to generate should be in the current namespace,
             # so that the type parameter is accessible.

@@ -288,6 +288,7 @@ class KotlinTranslator(BaseTranslator):
         body_res = children_res[-1] if node.body else ''
         prefix = " " * old_ident
         prefix += "" if node.is_final else "open "
+        prefix += "" if not node.is_inline else "inline "
         prefix += "" if not node.override else "override "
         prefix += "" if node.body is not None else "abstract "
         type_params = (

@@ -377,6 +377,7 @@ class FunctionDeclaration(Declaration):
                  func_type: int,
                  inferred_type: types.Type = None,
                  is_final=True,
+                 is_inline=False,
                  override=False,
                  type_parameters=[]):
         self.name = name
@@ -385,6 +386,7 @@ class FunctionDeclaration(Declaration):
         self.body = body
         self.func_type = func_type
         self.is_final = is_final
+        self.is_inline = is_inline
         self.override = override
         self.type_parameters = type_parameters
         self.inferred_type = (
@@ -431,17 +433,18 @@ class FunctionDeclaration(Declaration):
         return types.ParameterizedType(function_type, type_args)
 
     def __str__(self):
+        prefix = "inline " if self.is_inline else ""
         type_params_str = (
             "<" + ", ".join(map(str, self.type_parameters)) + "> "
             if self.type_parameters
             else ""
         )
         if self.ret_type is None:
-            return "{}fun {}({}) =\n  {}".format(
-                type_params_str, self.name, ",".join(map(str, self.params)),
+            return "{} {}fun {}({}) =\n  {}".format(
+                prefix, type_params_str, self.name, ",".join(map(str, self.params)),
                 str(self.body))
-        return "{}fun {}({}): {} =\n  {}".format(
-            type_params_str, self.name, ",".join(map(str, self.params)),
+        return "{} {}fun {}({}): {} =\n  {}".format(
+            prefix, type_params_str, self.name, ",".join(map(str, self.params)),
             str(self.ret_type), str(self.body))
 
     def is_equal(self, other):
@@ -455,6 +458,7 @@ class FunctionDeclaration(Declaration):
                     ) and
                     self.func_type == other.func_type and
                     self.is_final == other.is_final and
+                    self.is_inline == other.is_inline and
                     check_list_eq(self.params, other.params) and
                     check_list_eq(self.type_parameters,
                                   other.type_parameters) and
