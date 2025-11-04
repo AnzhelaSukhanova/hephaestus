@@ -138,3 +138,11 @@ dmypy.json
 # Pyre type checker
 .pyre/
 *.tasty
+
+# PyCharm
+.idea
+
+# Local files
+.DS_Store
+src/.DS_Store
+script.sh
