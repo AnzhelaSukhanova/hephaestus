@@ -1514,16 +1514,16 @@ class Generator():
             if isinstance(func, ast.FunctionDeclaration) and func.is_inline:
                 for cur_namespace in initial_namespace:
                     if cur_namespace == func.name:
-                        if len(funcs) == 1:
-                            funcs = []
-                            break
                         funcs.remove(rand_func)
                         func = None
         if not funcs:
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
-            type_fun = self._get_matching_class(etype, subtype=subtype,
+            type_fun = (
+                None if rand_func is not None
+                else self._get_matching_class(etype, subtype=subtype,
                                                 attr_name='functions')
+            )
             if type_fun is None:
                 msg = "No compatible classes for type {}"
                 log(self.logger, msg.format(etype))
@@ -1538,7 +1538,6 @@ class Generator():
                          type_fun.attr_decl, type_fun.attr_inst))
             rand_func = ut.random.choice(funcs)
             func = rand_func.attr_decl
-
         receiver = rand_func.receiver_expr
         params_map = rand_func.receiver_inst
         func_type_map = rand_func.attr_inst
