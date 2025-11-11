@@ -261,7 +261,8 @@ class Generator():
                 type_params = self.gen_type_params(
                     with_variance=False,
                     blacklist=self._get_type_variable_names(),
-                    for_function=True
+                    for_function=True,
+                    for_inline_function=is_inline
                 ) if ut.random.bool(prob=cfg.prob.parameterized_functions) \
                   else []
 
@@ -2064,7 +2065,8 @@ class Generator():
                         count: int=None,
                         with_variance=False,
                         blacklist: List[str]=None,
-                        for_function=False) -> List[tp.TypeParameter]:
+                        for_function=False,
+                        for_inline_function=False) -> List[tp.TypeParameter]:
         """Generate a list containing type parameters
 
         Args:
@@ -2107,7 +2109,9 @@ class Generator():
                 )
                 if bound.is_primitive():
                     bound = bound.box_type()
-            type_param = tp.TypeParameter(name, variance=variance, bound=bound)
+            #reified = ut.random.bool() if for_inline_function else False
+            reified = for_inline_function
+            type_param = tp.TypeParameter(name, variance=variance, bound=bound, reified=reified)
             # Add type parameter to context.
             self.context.add_type(self.namespace, type_param.name, type_param)
             type_params.append(type_param)

@@ -25,6 +25,7 @@ class KotlinCompiler(BaseCompiler):
         return [compiler, self.input_name, '-Xklib-ir-inliner=full',
                 '-produce', 'library', '-o', self.input_name, '-nowarn']
         # return [compiler, self.input_name,
+        #         '-Xklib-ir-inliner=full',
         #         '-Xir-produce-klib-dir',
         #         '-ir-output-name', 'library_js',
         #         '-ir-output-dir', 'library_js',

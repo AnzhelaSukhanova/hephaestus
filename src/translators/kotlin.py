@@ -190,8 +190,9 @@ class KotlinTranslator(BaseTranslator):
 
     @append_to
     def visit_type_param(self, node):
-        self._children_res.append("{}{}{}{}".format(
+        self._children_res.append("{}{}{}{}{}".format(
             node.variance_to_string(),
+            'reified ' if node.reified else '',
             ' ' if node.variance != tp.Invariant else '',
             node.name,
             ': ' + (

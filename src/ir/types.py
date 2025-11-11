@@ -232,10 +232,11 @@ class SimpleClassifier(Classifier):
 
 class TypeParameter(AbstractType):
 
-    def __init__(self, name: str, variance=None, bound: Type = None):
+    def __init__(self, name: str, variance=None, bound: Type = None, reified: bool = False):
         super().__init__(name)
         self.variance = variance or Invariant
         self.bound = bound
+        self.reified = reified
 
     def variance_to_string(self):
         return self.variance.variance_to_str()
@@ -292,13 +293,15 @@ class TypeParameter(AbstractType):
         return (self.__class__ == other.__class__ and
                 self.name == other.name and
                 self.variance == other.variance and
-                self.bound == other.bound)
+                self.bound == other.bound and
+                self.reified == other.reified)
 
     def __hash__(self):
         return hash(str(self.name) + str(self.variance))
 
     def __str__(self):
-        return "{}{}{}".format(
+        return "{}{}{}{}".format(
+            'reified ' if self.reified else '',
             self.variance_to_string() +
             ' ' if self.variance != Invariant else '',
             self.name,
