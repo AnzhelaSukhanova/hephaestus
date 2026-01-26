@@ -4,7 +4,7 @@ from src.compilers.base import BaseCompiler
 
 compiler = '$HOME/kotlin/kotlin-native/dist/bin/konanc'
 # compiler = '$HOME/kotlin/dist/kotlinc/bin/kotlinc-js'
-# compiler = '$HOME/.konan/kotlin-native-prebuilt-macos-aarch64-2.3.0-dev-10303/bin/konanc'
+# compiler = '$HOME/.konan/kotlin-native-prebuilt-macos-aarch64-/bin/konanc'
 
 class KotlinCompiler(BaseCompiler):
     ERROR_REGEX = re.compile(
@@ -22,11 +22,9 @@ class KotlinCompiler(BaseCompiler):
         return [compiler, '-version']
 
     def get_compiler_cmd(self):
-        return [compiler, self.input_name, '-Xklib-ir-inliner=full',
-                '-produce', 'library', '-o', self.input_name, '-nowarn']
+        return [compiler, self.input_name, '-produce', 'library', '-o', self.input_name, '-nowarn']
         # return [compiler, self.input_name,
-        #         '-Xklib-ir-inliner=full',
-        #         '-Xir-produce-klib-dir',
+        #         '-Xir-produce-klib-file',
         #         '-ir-output-name', 'library_js',
         #         '-ir-output-dir', 'library_js',
         #         '-libraries', '$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-js-2.3.255-SNAPSHOT.klib',

@@ -163,6 +163,11 @@ parser.add_argument(
     help="Disable parameterized functions"
 )
 parser.add_argument(
+    "--disable-reified-type-parameters",
+    action="store_true",
+    help="Disable reified type parameters"
+)
+parser.add_argument(
     "--error-filter-patterns",
     default='',
     type=str,
@@ -202,6 +207,8 @@ if args.disable_bounded_type_parameters:
     cfg.prob.bounded_type_parameters = 0
 if args.disable_parameterized_functions:
     cfg.prob.parameterized_functions = 0
+if args.disable_reified_type_parameters:
+    cfg.prob.reified_type_parameters = 0
 
 
 def validate_args(args):

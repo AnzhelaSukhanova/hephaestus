@@ -2109,8 +2109,7 @@ class Generator():
                 )
                 if bound.is_primitive():
                     bound = bound.box_type()
-            #reified = ut.random.bool() if for_inline_function else False
-            reified = for_inline_function
+            reified = ut.random.bool(cfg.prob.reified_type_parameters) if for_inline_function else False
             type_param = tp.TypeParameter(name, variance=variance, bound=bound, reified=reified)
             # Add type parameter to context.
             self.context.add_type(self.namespace, type_param.name, type_param)

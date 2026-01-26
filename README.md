@@ -114,6 +114,8 @@ optional arguments:
                         Disable bounded type parameters
   --disable-parameterized-functions
                         Disable parameterized functions
+  --disable-reified-type-parameters
+                        Disable reified type parameters
 
 ```
 
