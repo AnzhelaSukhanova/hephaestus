@@ -195,6 +195,7 @@ class Generator():
                       params:List[ast.ParameterDeclaration]=None,
                       abstract=False,
                       is_interface=False,
+                      inherits_param_with_default=False,
                       type_params:List[tp.TypeParameter]=None,
                       namespace=None) -> ast.FunctionDeclaration:
         """Generate a function declaration.
@@ -211,6 +212,7 @@ class Generator():
             params: list of parameter declarations.
             abstract: function of an abstract class.
             is_interface: function of an interface.
+            inherits_param_with_default: function inherits parameter with a default value.
             type_params: list of type parameters for parameterized function.
             namespace: set explicit namespace.
 
@@ -242,7 +244,8 @@ class Generator():
                            self.namespace[-2][0].islower())
         is_inline = (not abstract and
                      not nested_function and
-                     not (class_method and not class_is_final))
+                     not (class_method and not class_is_final) and
+                     not inherits_param_with_default)
 
         prev_inside_java_lamdba = self._inside_java_lambda
         self._inside_java_lambda = nested_function and self.language == "java"
@@ -680,7 +683,10 @@ class Generator():
             self._gen_type_params_from_existing(func, type_var_map)
         type_param_names = [t.name for t in type_params]
         ret_type = func.ret_type
+        inherits_param_with_default = False
         for p in params:
+            if p.default is not None:
+                inherits_param_with_default = True
             sub = False
             sub_type_map = {
                 k: v for k, v in type_var_map.items()
@@ -708,6 +714,7 @@ class Generator():
                                       class_is_final=class_is_final,
                                       params=params,
                                       is_interface=is_interface,
+                                      inherits_param_with_default=inherits_param_with_default,
                                       type_params=type_params)
         if func.body is None:
             new_func.is_final = False
