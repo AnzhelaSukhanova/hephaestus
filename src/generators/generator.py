@@ -291,6 +291,7 @@ class Generator():
                        if class_method
                        else ast.FunctionDeclaration.FUNCTION),
             is_final=not can_override,
+            is_inline=ut.random.bool(),
             inferred_type=None,
             type_parameters=type_params,
         )

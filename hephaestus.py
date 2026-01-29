@@ -420,6 +420,8 @@ def check_oracle(dirname, oracles):
             output[pid] = proc_res.stats
             continue
         for program, oracle in proc_res.stats['programs'].items():
+            if oracle and program not in failed:
+                shutil.copyfile(program, 'success.txt')
             if oracle and program in failed:
                 # Here the program should be compiled successfully. However,
                 # it's in the list of the error messages.

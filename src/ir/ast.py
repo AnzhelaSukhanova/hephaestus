@@ -377,6 +377,7 @@ class FunctionDeclaration(Declaration):
                  func_type: int,
                  inferred_type: types.Type = None,
                  is_final=True,
+                 is_inline=False,
                  override=False,
                  type_parameters=[]):
         self.name = name
@@ -385,6 +386,7 @@ class FunctionDeclaration(Declaration):
         self.body = body
         self.func_type = func_type
         self.is_final = is_final
+        self.is_inline = is_inline
         self.override = override
         self.type_parameters = type_parameters
         self.inferred_type = (

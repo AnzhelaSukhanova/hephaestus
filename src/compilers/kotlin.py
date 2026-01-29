@@ -2,9 +2,13 @@ import re
 
 from src.compilers.base import BaseCompiler
 
+# Native compilers
 compiler = '$HOME/kotlin/kotlin-native/dist/bin/konanc'
+# compiler = '$HOME/.konan/kotlin-native-prebuilt-macos-aarch64-/bin/konanc'
+
+# JS compiler
 # compiler = '$HOME/kotlin/dist/kotlinc/bin/kotlinc-js'
-# compiler = '$HOME/.konan/kotlin-native-prebuilt-macos-aarch64-2.3.0-dev-10303/bin/konanc'
+
 
 class KotlinCompiler(BaseCompiler):
     ERROR_REGEX = re.compile(
@@ -22,13 +26,14 @@ class KotlinCompiler(BaseCompiler):
         return [compiler, '-version']
 
     def get_compiler_cmd(self):
-        return [compiler, self.input_name, '-Xklib-ir-inliner=full',
-                '-produce', 'library', '-o', self.input_name, '-nowarn']
+        # Native compilation
+        return [compiler, self.input_name, '-produce', 'library', '-o', self.input_name, '-nowarn']
+        # JS compilation
         # return [compiler, self.input_name,
-        #         '-Xir-produce-klib-dir',
+        #         '-Xir-produce-klib-file',
         #         '-ir-output-name', 'library_js',
         #         '-ir-output-dir', 'library_js',
-        #         '-libraries', '$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-js-2.3.255-SNAPSHOT.klib',
+        #         '-libraries', '$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-js-2.4.255-SNAPSHOT.klib',
         #         '-nowarn']
 
     def get_filename(self, match):
