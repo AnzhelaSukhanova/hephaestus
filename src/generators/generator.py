@@ -82,6 +82,8 @@ class Generator():
         self._blacklisted_classes: set = set()
 
         self.inline_functions: set = set()
+        # Track if we're currently inside an inline function body
+        self._inside_inline_function: bool = False
 
     ### Entry Point Generators ###
 
@@ -273,6 +275,13 @@ class Generator():
             # Nested functions cannot be parameterized (
             # at least in Groovy, Java), because they are modeled as lambdas.
             type_params = []
+
+        # Track if we're inside an inline function (for Kotlin local function restriction)
+        # Must be set before generating params (default values may contain lambdas)
+        prev_inside_inline = self._inside_inline_function
+        if is_inline:
+            self._inside_inline_function = True
+
         if params is not None:
             for p in params:
                 self._add_node_to_parent(self.namespace, p)
@@ -310,10 +319,12 @@ class Generator():
 
         if func.is_inline:
             self.inline_functions.add(func)
+
         if func.body is not None:
             body = self._gen_func_body(ret_type, func)
         func.body = body
 
+        self._inside_inline_function = prev_inside_inline
         self._inside_java_lambda = prev_inside_java_lamdba
         self.depth = initial_depth
         self.namespace = initial_namespace
@@ -2581,6 +2592,9 @@ class Generator():
                 if f.name == cur_namespace:
                     gen_method = True
                     break
+        # Kotlin doesn't allow local functions inside inline function bodies
+        if self._inside_inline_function and self.language == 'kotlin':
+            gen_method = True
         if not gen_method:
             # If the given type 'etype' is a type parameter, then the
             # function we want to generate should be in the current namespace,
