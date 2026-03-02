@@ -114,6 +114,10 @@ def logging():
 
     STATS['Info']['compiler'] = compiler
 
+def validate_compiler(cfg):
+    if not COMPILERS[cfg.language].is_installed():
+        sys.exit(f"{cfg.language} compiler is not installed or path is invalid")
+
 
 def run_command(arguments, get_stdout=True):
     """Run a command
@@ -586,6 +590,7 @@ def run_parallel():
 def main():
     validate_args(cli_args)
     pre_process_args(cli_args)
+    validate_compiler(cli_args)
 
     if cli_args.debug or cli_args.workers is None:
         run()

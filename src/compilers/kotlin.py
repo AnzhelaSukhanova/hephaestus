@@ -1,9 +1,18 @@
 import re
+import shutil
+import os
+import subprocess
 
 from src.compilers.base import BaseCompiler
 
+
 # Native compilers
-compiler = '$HOME/kotlin/kotlin-native/dist/bin/konanc'
+#linux:
+# compiler = '$HOME/kotlin/kotlin-native/dist/bin/konanc'
+
+#windows hardcode
+compiler = "D:/fuzzer/kotlin/kotlin-native/dist/bin/konanc.bat"
+
 # compiler = '$HOME/.konan/kotlin-native-prebuilt-macos-aarch64-/bin/konanc'
 
 # JS compiler
@@ -23,6 +32,19 @@ class KotlinCompiler(BaseCompiler):
     @classmethod
     def get_compiler_version(cls):
         return [compiler, '-version']
+
+    @classmethod
+    def is_installed(cls) -> bool:
+        if shutil.which(compiler, mode = os.X_OK) is None:
+            return False
+        cmd = cls.get_compiler_version()
+        try:
+            subprocess.run(cmd, capture_output=True, check=True)
+            return True
+        except (OSError, subprocess.CalledProcessError):
+            return False
+
+
 
     def get_compiler_cmd(self):
         # Native compilation

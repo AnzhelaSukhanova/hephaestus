@@ -15,6 +15,10 @@ class BaseCompiler():
     def get_compiler_version(cls):
         raise NotImplementedError('get_compiler_version() must be implemented')
 
+    @classmethod
+    def is_installed(cls) -> bool:
+        raise NotImplementedError('is_installed() must be implemented')
+
     def get_compiler_cmd(self):
         raise NotImplementedError('get_compiler_cmd() must be implemented')
 
