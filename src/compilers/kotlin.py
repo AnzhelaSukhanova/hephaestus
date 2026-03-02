@@ -11,7 +11,7 @@ compiler = '$HOME/kotlin/kotlin-native/dist/bin/konanc'
 
 class KotlinCompiler(BaseCompiler):
     ERROR_REGEX = re.compile(
-        r'([a-zA-Z0-9\/_]+.kt):\d+:\d+:[ ]+error:[ ]+(.*)')
+        r'([:\\a-zA-Z0-9\/_]+.kt):\d+:\d+:[ ]+error:[ ]+(.*)')
     CRASH_REGEX = re.compile(
         r'(org\.jetbrains\..*)\n(.*)',
         re.MULTILINE
