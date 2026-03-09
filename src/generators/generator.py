@@ -83,6 +83,7 @@ class Generator():
 
         self.inline_functions: set = set()
 
+        self._is_local_in_inlined: bool = False
     ### Entry Point Generators ###
 
     def generate(self, context=None) -> ast.Program:
@@ -273,6 +274,11 @@ class Generator():
             # Nested functions cannot be parameterized (
             # at least in Groovy, Java), because they are modeled as lambdas.
             type_params = []
+
+        _prev_is_local_in_inlined = self._is_local_in_inlined
+        if is_inline:
+            self._is_local_in_inlined = True
+
         if params is not None:
             for p in params:
                 self._add_node_to_parent(self.namespace, p)
@@ -314,6 +320,7 @@ class Generator():
             body = self._gen_func_body(ret_type, func)
         func.body = body
 
+        self._is_local_in_inlined = _prev_is_local_in_inlined
         self._inside_java_lambda = prev_inside_java_lamdba
         self.depth = initial_depth
         self.namespace = initial_namespace
@@ -2581,6 +2588,10 @@ class Generator():
                 if f.name == cur_namespace:
                     gen_method = True
                     break
+
+        if self._is_local_in_inlined:
+            gen_method = True
+
         if not gen_method:
             # If the given type 'etype' is a type parameter, then the
             # function we want to generate should be in the current namespace,
