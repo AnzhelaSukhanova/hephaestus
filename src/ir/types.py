@@ -275,7 +275,7 @@ class TypeParameter(AbstractType):
         t = self.bound
         if t.is_type_var():
             return t.get_bound_rec(factory)
-        if not t.has_type_variables():
+        if not t.has_type_variables() or factory is None:
             return t
         # If the bound is a parameterized type that contains other type
         # variables, we have to convert this type into an equivalent type
@@ -534,7 +534,8 @@ def _to_type_variable_free(t: Type, t_param, factory) -> Type:
             (None, Invariant)
             if t_param.is_contravariant()
             else (
-                factory.get_any_type() if bound is None else bound,
+                (factory.get_any_type() if factory else None)
+                if bound is None else bound,
                 Covariant
             )
         )
@@ -643,7 +644,8 @@ class ParameterizedType(SimpleClassifier):
                     bound, variance = (
                         (None, Invariant)
                         if t_param.is_contravariant()
-                        else (factory.get_any_type(), Covariant)
+                        else (factory.get_any_type() if factory else None,
+                              Covariant)
                     )
                     type_args.append(WildCardType(bound, variance))
                 else:
