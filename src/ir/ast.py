@@ -325,11 +325,13 @@ class ParameterDeclaration(Declaration):
     def __init__(self, name: str,
                  param_type: types.Type,
                  vararg: bool = False,
-                 default: Expr = None):
+                 default: Expr = None,
+                 noinline: bool = False):
         self.name = name
         self.param_type = param_type
         self.vararg = vararg
         self.default = default
+        self.noinline = noinline
 
     def children(self):
         if self.default:
@@ -360,7 +362,8 @@ class ParameterDeclaration(Declaration):
             return (self.name == other.name and
                     self.param_type == other.param_type and
                     self.vararg == other.vararg and
-                    check_default_eq(self.default, other.default))
+                    check_default_eq(self.default, other.default) and
+                    self.noinline == other.noinline)
         return False
 
 

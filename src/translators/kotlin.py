@@ -1,5 +1,6 @@
 from src.ir import ast, kotlin_types as kt, types as tp, type_utils as tu
 from src.translators.base import BaseTranslator
+from src.generators.noinline_analysis import NoInlineAnalysis
 
 
 def append_to(visit):
@@ -80,6 +81,7 @@ class KotlinTranslator(BaseTranslator):
         return res
 
     def visit_program(self, node):
+        NoInlineAnalysis().visit(node)
         self.context = node.context
         children = node.children()
         for c in children:
@@ -254,6 +256,7 @@ class KotlinTranslator(BaseTranslator):
             c.accept(self)
         self.ident = old_ident
         vararg_str = 'vararg ' if node.vararg else ''
+        noinline_str = 'noinline ' if node.noinline else ''
         # Recall that varargs ara actually arrays in the signature of
         # the corresponding parameters.
         param_type = (
@@ -261,7 +264,7 @@ class KotlinTranslator(BaseTranslator):
             if node.vararg and isinstance(node.param_type,
                                           tp.ParameterizedType)
             else node.param_type)
-        res = vararg_str + node.name + ": " + self.get_type_name(param_type)
+        res = noinline_str + vararg_str + node.name + ": " + self.get_type_name(param_type)
         if len(children):
             children_res = self.pop_children_res(children)
             res += " = " + children_res[0]
