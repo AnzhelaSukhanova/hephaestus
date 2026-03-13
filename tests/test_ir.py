@@ -265,6 +265,37 @@ def test_get_abstract_functions_parameterized_chain():
                         [exp_func1])
 
 
+def test_get_callable_functions_ignores_overridden_super_method():
+    parent_fun = FunctionDeclaration(
+        "dormouse",
+        [],
+        Double,
+        BottomConstant(Double),
+        FunctionDeclaration.CLASS_METHOD,
+        is_inline=False,
+    )
+    child_fun = FunctionDeclaration(
+        "dormouse",
+        [],
+        Double,
+        BottomConstant(Double),
+        FunctionDeclaration.CLASS_METHOD,
+        is_inline=True,
+    )
+    parent = ClassDeclaration("Parent", [], functions=[parent_fun])
+    child = ClassDeclaration(
+        "Child",
+        [SuperClassInstantiation(parent.get_type(), [])],
+        functions=[child_fun],
+    )
+
+    callables = [f for f in child.get_callable_functions([parent, child])
+                 if f.name == "dormouse"]
+
+    assert len(callables) == 1
+    assert callables[0].is_inline
+
+
 def test_get_fields():
     field1 = FieldDeclaration("foo", String)
     field2 = FieldDeclaration("bar", Any)

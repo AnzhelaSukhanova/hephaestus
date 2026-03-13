@@ -640,18 +640,25 @@ class ClassDeclaration(Declaration):
     def get_callable_functions(self, class_decls) -> Set[FunctionDeclaration]:
         """All functions that can be called in instantiations of this class
         """
-        # Get functions that are implemented in the current class
-        functions = set(self.functions)
+        def _signature_key(func):
+            # Kotlin overriding is based on name + parameter signature.
+            return (func.name, tuple(str(p.get_type()) for p in func.params))
+
+        # Keep local methods first so inherited overrides are ignored.
+        functions_by_sig = {
+            _signature_key(func): func
+            for func in self.functions
+        }
 
         if not self.superclasses:
-            return functions
+            return set(functions_by_sig.values())
 
         # Retrieve functions from the inheritance chain.
         super_cls = self.superclasses[0]
         class_decl = tu.get_superclass_decl(super_cls, class_decls)
 
         if not class_decl:
-            return functions
+            return set(functions_by_sig.values())
 
         type_var_map = tu.get_superclass_type_var_map(super_cls, class_decl)
 
@@ -679,9 +686,11 @@ class ClassDeclaration(Declaration):
             new_f.params = params
             new_f.inferred_type = ret_type
             new_f.ret_type = ret_type
-            functions.add(new_f)
+            if _signature_key(new_f) in functions_by_sig:
+                continue
+            functions_by_sig[_signature_key(new_f)] = new_f
 
-        return functions
+        return set(functions_by_sig.values())
 
     def get_all_fields(self, class_decls) -> Set[FieldDeclaration]:
         """

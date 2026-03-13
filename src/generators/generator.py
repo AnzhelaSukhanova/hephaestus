@@ -28,6 +28,7 @@ from src import utils as ut
 from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
+from src.graph_utils import reachable
 from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
@@ -81,7 +82,8 @@ class Generator():
         # complete information about them.
         self._blacklisted_classes: set = set()
 
-        self.inline_functions: set = set()
+        self.inline_call_graph = defaultdict(set)
+        self._current_inline_function: ast.FunctionDeclaration = None
 
         self._is_local_in_inlined: bool = False
     ### Entry Point Generators ###
@@ -134,7 +136,7 @@ class Generator():
             ret_type=self.bt_factory.get_void_type(),
             body=None,
             func_type=ast.FunctionDeclaration.FUNCTION)
-        self._add_node_to_parent(self.namespace, main_func)
+        self._add_node_to_parent(self.namespace[:-1], main_func)
         expr = self.generate_expr()
         decls = list(self.context.get_declarations(
             self.namespace, True).values())
@@ -198,7 +200,8 @@ class Generator():
                       is_interface=False,
                       inherits_param_with_default=False,
                       type_params:List[tp.TypeParameter]=None,
-                      namespace=None) -> ast.FunctionDeclaration:
+                      namespace=None,
+                      force_not_inline = False) -> ast.FunctionDeclaration:
         """Generate a function declaration.
 
         This method is responsible for generating all types of function/methods,
@@ -246,7 +249,8 @@ class Generator():
         is_inline = (not abstract and
                      not nested_function and
                      not (class_method and not class_is_final) and
-                     not inherits_param_with_default)
+                     not inherits_param_with_default and
+                     not force_not_inline)
 
         prev_inside_java_lamdba = self._inside_java_lambda
         self._inside_java_lambda = nested_function and self.language == "java"
@@ -315,9 +319,14 @@ class Generator():
             self.context.add_var(self.namespace, p.name, p)
 
         if func.is_inline:
-            self.inline_functions.add(func)
+            self.inline_call_graph.setdefault(func, set())
         if func.body is not None:
-            body = self._gen_func_body(ret_type, func)
+            prev_inline_func = self._current_inline_function
+            self._current_inline_function = func if func.is_inline else None
+            try:
+                body = self._gen_func_body(ret_type, func)
+            finally:
+                self._current_inline_function = prev_inline_func
         func.body = body
 
         self._is_local_in_inlined = _prev_is_local_in_inlined
@@ -372,7 +381,8 @@ class Generator():
                        not_void: bool=False,
                        type_params: List[tp.TypeParameter]=None,
                        class_name: str=None,
-                       signature: tp.ParameterizedType=None
+                       signature: tp.ParameterizedType=None,
+                       force_not_inline=False
                        ) -> ast.ClassDeclaration:
         """Generate a class declaration.
 
@@ -421,7 +431,7 @@ class Generator():
             self.gen_class_fields(cls, super_cls_info, field_type)
 
         self.gen_class_functions(cls, super_cls_info,
-                                 not_void, fret_type, signature)
+                                 not_void, fret_type, signature,force_not_inline = force_not_inline)
         self._blacklisted_classes.remove(class_name)
         self.namespace = initial_namespace
         self.depth = initial_depth
@@ -579,7 +589,8 @@ class Generator():
                             curr_cls, super_cls_info,
                             not_void=False,
                             fret_type=None,
-                            signature: tp.ParameterizedType=None
+                            signature: tp.ParameterizedType=None,
+                            force_not_inline=False
                             ) -> List[ast.FunctionDeclaration]:
         """Generate methods for a class.
 
@@ -604,21 +615,24 @@ class Generator():
                 self.gen_func_decl(fret_type, not_void=not_void,
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
+                                   is_interface=curr_cls.is_interface(),
+                                   force_not_inline = force_not_inline))
         if signature:
             ret_type, params = self._gen_ret_and_paramas_from_sig(signature)
             funcs.append(
                 self.gen_func_decl(ret_type, params=params, not_void=not_void,
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
+                                   is_interface=curr_cls.is_interface(),
+                                   force_not_inline = force_not_inline))
         if not super_cls_info:
             for _ in range(ut.random.integer(0, max_funcs)):
                 funcs.append(
                     self.gen_func_decl(not_void=not_void,
                                        class_is_final=curr_cls.is_final,
                                        abstract=abstract,
-                                       is_interface=curr_cls.is_interface()))
+                                       is_interface=curr_cls.is_interface(),
+                                       force_not_inline = force_not_inline))
         else:
             abstract_funcs = []
             class_decls = self.context.get_classes(self.namespace).values()
@@ -631,7 +645,8 @@ class Generator():
                             f,
                             super_cls_info.type_var_map,
                             curr_cls.is_final,
-                            curr_cls.is_interface()
+                            curr_cls.is_interface(),
+                            force_not_inline=force_not_inline
                         )
                     )
                 max_funcs = max_funcs - len(abstract_funcs)
@@ -654,7 +669,8 @@ class Generator():
                     self._gen_func_from_existing(f,
                                                  super_cls_info.type_var_map,
                                                  curr_cls.is_final,
-                                                 curr_cls.is_interface()))
+                                                 curr_cls.is_interface(),
+                                                 force_not_inline = force_not_inline))
             max_funcs = max_funcs - len(chosen_funcs)
             if max_funcs < 0:
                 return funcs
@@ -663,7 +679,8 @@ class Generator():
                     self.gen_func_decl(not_void=not_void,
                                        class_is_final=curr_cls.is_final,
                                        abstract=abstract,
-                                       is_interface=curr_cls.is_interface()))
+                                       is_interface=curr_cls.is_interface(),
+                                       force_not_inline = force_not_inline))
         return funcs
 
 
@@ -673,7 +690,8 @@ class Generator():
                                 func: ast.FunctionDeclaration,
                                 type_var_map: tu.TypeVarMap,
                                 class_is_final: bool,
-                                is_interface: bool) -> ast.FunctionDeclaration:
+                                is_interface: bool,
+                                force_not_inline = False) -> ast.FunctionDeclaration:
         """Generate a method that overrides an existing method.
 
         Args:
@@ -722,9 +740,12 @@ class Generator():
                                       params=params,
                                       is_interface=is_interface,
                                       inherits_param_with_default=inherits_param_with_default,
-                                      type_params=type_params)
+                                      type_params=type_params,
+                                      force_not_inline = force_not_inline)
         if func.body is None:
             new_func.is_final = False
+        if new_func.is_inline:
+            new_func.is_final = True
         new_func.override = True
         return new_func
 
@@ -1524,13 +1545,18 @@ class Generator():
         while not func and funcs:
             rand_func = ut.random.choice(funcs)
             func = rand_func.attr_decl
+            if self._current_inline_function is not None:
+                log(self.logger, "Checking if caller {} and callee {} would create an inline cycle".format(
+                    self._current_inline_function.name if self._current_inline_function
+                    else None, func.name))
+            if self._would_create_inline_cycle(self._current_inline_function,
+                                               func):
+                log(self.logger, "Yes, it would create an inline cycle. Removing {} from candidates".format(func.name))
+                funcs.remove(rand_func)
+                func = None
 
-            # Check for recursive calls of inline functions
-            if isinstance(func, ast.FunctionDeclaration) and func.is_inline:
-                for cur_namespace in initial_namespace:
-                    if cur_namespace == func.name:
-                        funcs.remove(rand_func)
-                        func = None
+            else:
+                log(self.logger, "No, it would not create an inline cycle. Selected {} as callee".format(func.name))
         if not funcs:
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
@@ -1545,6 +1571,11 @@ class Generator():
                 # Here, we generate a function or a class containing a function
                 # whose return type is 'etype'.
                 type_fun = self._gen_matching_func(etype, not_void=True)
+
+            if self._would_create_inline_cycle(self._current_inline_function,
+                                               type_fun.attr_decl):
+                type_fun  = self._gen_matching_func(etype, not_void=True, force_not_inline=True)
+
             receiver = (
                 None if type_fun.receiver_t is None
                 else self.generate_expr(type_fun.receiver_t, only_leaves)
@@ -1562,6 +1593,7 @@ class Generator():
         msg = ("Selected callee method {}: type {}; receiver {}; "
                "TypeVarMap {}".format(func.name, etype, receiver, params_map))
         log(self.logger, msg)
+        self._record_inline_call(self._current_inline_function, func)
         args = []
         initial_depth = self.depth
         self.depth += 1
@@ -1615,7 +1647,7 @@ class Generator():
             only_leaves: do not generate new leaves except from `expr`.
             subtype: The returned type could be a subtype of `etype`.
         """
-        # Tuple of signature, name, receiver
+        # Tuple of signature, name, receiver, resolved callee declaration
         refs = []
         # Search for function references in current scope
         variables = self.context.get_vars(self.namespace).values()
@@ -1630,7 +1662,21 @@ class Generator():
                 continue
             ret_type = var_type.type_args[-1]
             if (subtype and ret_type.is_assignable(etype)) or ret_type == etype:
-                refs.append((var_type, var.name, None))
+                ref_decl = None
+                ref_expr = getattr(var, 'expr', None)
+                if isinstance(ref_expr, ast.FunctionReference):
+                    if ref_expr.receiver is None:
+                        ref_decl = self.context.get_funcs(self.namespace).get(
+                            ref_expr.func)
+                    else:
+                        receiver_t = getattr(
+                            ref_expr.receiver, 'get_type', lambda: None)()
+                        if receiver_t is not None:
+                            decl_res = tu.get_decl_from_inheritance(
+                                receiver_t, ref_expr.func, self.context)
+                            if decl_res is not None:
+                                ref_decl = decl_res[0]
+                refs.append((var_type, var.name, None, ref_decl))
 
         if not refs:
             # Detect receivers
@@ -1639,14 +1685,25 @@ class Generator():
             refs = [(tp.substitute_type(
                         obj.attr_decl.get_type(), obj.receiver_inst),
                     obj.attr_decl.name,
-                    obj.receiver_expr)
+                    obj.receiver_expr,
+                    None)
                     for obj in objs
                    ]
 
         if not refs:
             return None
 
-        signature, name, receiver = ut.random.choice(refs)
+        if self._current_inline_function is not None:
+            refs = [
+                ref
+                for ref in refs
+                if ref[3] is not None and not self._would_create_inline_cycle(
+                    self._current_inline_function, ref[3])
+            ]
+            if not refs:
+                return None
+
+        signature, name, receiver, callee_decl = ut.random.choice(refs)
 
         # Generate arguments
         args = []
@@ -1659,6 +1716,7 @@ class Generator():
                                      gen_bottom=gen_bottom, sam_coercion=False)
             args.append(ast.CallArgument(arg))
         self.depth = initial_depth
+        self._record_inline_call(self._current_inline_function, callee_decl)
         return ast.FunctionCall(name, args, receiver=receiver,
                                 is_ref_call=True)
 
@@ -1849,11 +1907,20 @@ class Generator():
         for func in funcs:
             if func.attr_decl.name == self.namespace[-1]:
                 continue
-            refs.append(ast.FunctionReference(
-                func.attr_decl.name, func.receiver_expr, etype))
+            if self._would_create_inline_cycle(self._current_inline_function,
+                                               func.attr_decl):
+                continue
+            refs.append((
+                ast.FunctionReference(
+                    func.attr_decl.name, func.receiver_expr, etype),
+                func.attr_decl,
+            ))
 
         if refs:
-            return ut.random.choice(refs)
+            ref, callee_decl = ut.random.choice(refs)
+            self._record_inline_call(self._current_inline_function,
+                                     callee_decl)
+            return ref
 
         ref = None
         # NOTE a maximum recursion error may occur.
@@ -1868,6 +1935,9 @@ class Generator():
                 etype, not_void=True, signature=True)
 
         if type_fun:
+            if self._would_create_inline_cycle(self._current_inline_function,
+                                               type_fun.attr_decl):
+                return None
             receiver = (
                 None if type_fun.receiver_t is None
                 else self.generate_expr(type_fun.receiver_t,
@@ -1875,6 +1945,11 @@ class Generator():
             )
             ref = ast.FunctionReference(
                 type_fun.attr_decl.name, receiver, etype)
+
+            # Even though the generated function reference may not be called, we still need to check and record it.
+            # Self-reference in an inline function on its own is enough to trigger a compiler error
+            self._record_inline_call(self._current_inline_function,
+                                     type_fun.attr_decl)
 
         return ref
 
@@ -2562,10 +2637,38 @@ class Generator():
                                                       'functions',
                                                       signature=signature)
 
+    def _is_inline_function_decl(self, func) -> bool:
+        return (isinstance(func, ast.FunctionDeclaration) and
+                getattr(func, 'is_inline', False))
+
+    def _would_create_inline_cycle(self, caller, callee) -> bool:
+        if not self._is_inline_function_decl(caller):
+            return False
+        if not self._is_inline_function_decl(callee):
+            return False
+
+        if caller == callee:
+            return True
+
+        self.inline_call_graph.setdefault(caller, set())
+        self.inline_call_graph.setdefault(callee, set())
+        return reachable(self.inline_call_graph, callee, caller)
+
+    def _record_inline_call(self, caller, callee):
+        if not self._is_inline_function_decl(caller):
+            return
+        if not self._is_inline_function_decl(callee):
+            return
+
+        self.inline_call_graph.setdefault(caller, set())
+        self.inline_call_graph.setdefault(callee, set())
+        self.inline_call_graph[caller].add(callee)
+
     def _gen_matching_func(self,
                            etype: tp.Type,
                            not_void=False,
-                           signature=False
+                           signature=False,
+                           force_not_inline = False
                            ) -> gu.AttrAccessInfo:
         """ Generate a function or a class containing a function whose return
         type is 'etype'.
@@ -2583,11 +2686,6 @@ class Generator():
             signature
         )
         initial_namespace = self.namespace
-        for f in self.inline_functions:
-            for cur_namespace in initial_namespace:
-                if f.name == cur_namespace:
-                    gen_method = True
-                    break
 
         if self._is_local_in_inlined:
             gen_method = True
@@ -2605,7 +2703,7 @@ class Generator():
             params = None
             if signature:
                 etype, params = self._gen_ret_and_paramas_from_sig(etype)
-            func = self.gen_func_decl(etype, params=params, not_void=not_void)
+            func = self.gen_func_decl(etype, params=params, not_void=not_void, force_not_inline = force_not_inline)
             self.namespace = initial_namespace
             func_type_var_map = {}
             if func.is_parameterized():
@@ -2618,7 +2716,7 @@ class Generator():
             return gu.AttrAccessInfo(None, {}, func, func_type_var_map)
         # Generate a class containing the requested function
         return self._gen_matching_class(etype, 'functions',
-                                        signature=signature)
+                                        signature=signature, force_not_inline = force_not_inline)
 
     def _get_matching_class(self,
                             etype: tp.Type,
@@ -2831,7 +2929,8 @@ class Generator():
                             etype: tp.Type,
                             attr_name: str,
                             not_void=False,
-                            signature=False) -> gu.AttrAccessInfo:
+                            signature=False,
+                            force_not_inline = False) -> gu.AttrAccessInfo:
         """Generate a class that has an attribute of attr_name that is/return etype.
 
         Args:
@@ -2872,7 +2971,7 @@ class Generator():
             kwargs = {'field_type': etype2}
         cls = self.gen_class_decl(**kwargs, not_void=not_void,
                                   type_params=type_params,
-                                  class_name=class_name)
+                                  class_name=class_name, force_not_inline = force_not_inline)
         self.namespace = initial_namespace
 
         # Get receiver
