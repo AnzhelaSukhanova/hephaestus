@@ -1373,3 +1373,32 @@ def test_update_type_var_bound_rec():
                                      targs, indexes, type_var_map)
     assert type_var_map == {type_param1: kt.Number, type_param2: kt.Number}
     assert targs == [kt.Number, kt.Number]
+
+
+def test_update_type_var_bound_rec_with_equivalent_bound_key():
+    type_param1 = tp.TypeParameter("T")
+    type_param2 = tp.TypeParameter("X", bound=tp.TypeParameter("T"))
+    type_var_map = {type_param1: kt.String}
+    indexes = {type_param1: 0, type_param2: 1}
+    targs = [kt.String]
+
+    tutils.update_type_var_bound_rec(type_param2, kt.Integer,
+                                     targs, indexes, type_var_map)
+
+    assert type_var_map[type_param1] == kt.Integer
+    assert targs == [kt.Integer]
+
+
+def test_update_type_var_bound_rec_outer_scope_bound_is_ignored():
+    outer_type_param = tp.TypeParameter("T")
+    inner_type_param = tp.TypeParameter("X", bound=tp.TypeParameter("T"))
+    type_var_map = {outer_type_param: kt.String}
+    indexes = {inner_type_param: 0}
+    targs = []
+
+    tutils.update_type_var_bound_rec(inner_type_param, kt.Integer,
+                                     targs, indexes, type_var_map)
+
+    assert type_var_map == {outer_type_param: kt.String}
+    assert targs == []
+
