@@ -74,7 +74,7 @@ class EscapeVisitor(visitors.DefaultVisitor):
         for i, arg in enumerate(node.args):
             if isinstance(arg.expr, ast.Variable) and arg.expr.name == self.param.name:
                 is_safe = False
-                if func_decl and func_decl.is_inline:
+                if node.receiver is None and func_decl and func_decl.is_inline:
                     if i < len(func_decl.params) and not func_decl.params[i].noinline:
                         is_safe = True
                 
@@ -82,7 +82,7 @@ class EscapeVisitor(visitors.DefaultVisitor):
                     self.escapes = True
             elif isinstance(arg.expr, ast.Lambda):
                 is_lambda_inlined = False
-                if func_decl and func_decl.is_inline:
+                if node.receiver is None and func_decl and func_decl.is_inline:
                     if i < len(func_decl.params) and not func_decl.params[i].noinline:
                         is_lambda_inlined = True
                 
