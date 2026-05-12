@@ -17,7 +17,7 @@ parser.add_argument(
 parser.add_argument(
     "-i", "--iterations",
     type=int,
-    default=3,
+    default=1,
     help="Iterations to run (default: 3)"
 )
 parser.add_argument(
@@ -110,6 +110,12 @@ parser.add_argument(
     default="kotlin",
     choices=['kotlin', 'groovy', 'java', 'scala'],
     help="Select specific language"
+)
+parser.add_argument(
+    "--backend",
+    default="native",
+    choices=['native', 'js', 'wasm'],
+    help="Select Kotlin backend"
 )
 parser.add_argument(
     "--max-type-params",
