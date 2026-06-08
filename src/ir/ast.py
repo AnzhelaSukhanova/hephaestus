@@ -319,16 +319,13 @@ class CallArgument(Node):
             return (self.name == other.name and
                     self.expr.is_equal(other.is_equal))
         return False
-# TODO: if ASTs are considered backend agnostic, don't write Kotlin specific strings here. Maybe something in translator layer can extend to
-# TODO: Kotlin specific implementations InliningScopeKotlin
-# TODO: Decide StrEnum (3.9 -> 3.11) or not
-# By default we translate (node.inlining_scope) to Kotlin, but patternmatching over InliningScope
 # For now, "InliningScope" (similarly to func.is_inline ) is generated for every param in every language
-from enum import StrEnum
-class InliningScope(StrEnum):
-    INLINE = ""
-    NOINLINE = "noinline "
-    CROSSINLINE = "crossinline "
+from enum import Enum, auto
+class InliningScope(Enum):
+    DEFAULT = auto() # Is not a param of inline function, or a non-functional param of inline function (so adding modifiers produces compile error)
+    INLINE = auto()
+    NOINLINE = auto()
+    CROSSINLINE = auto()
 
 
 class ParameterDeclaration(Declaration):
@@ -336,7 +333,7 @@ class ParameterDeclaration(Declaration):
                  param_type: types.Type,
                  vararg: bool = False,
                  default: Expr = None,
-                 inlining_scope: InliningScope = InliningScope.INLINE):
+                 inlining_scope: InliningScope = InliningScope.DEFAULT):
         self.name = name
         self.param_type = param_type
         self.vararg = vararg

@@ -253,6 +253,15 @@ class KotlinTranslator(BaseTranslator):
         for c in node.children():
             c.accept(self)
         self.ident = old_ident
+
+        INLINING_SCOPE_TO_KOTLIN = {
+            ast.InliningScope.DEFAULT: '',
+            ast.InliningScope.INLINE: '',
+            ast.InliningScope.NOINLINE: 'noinline ',
+            ast.InliningScope.CROSSINLINE: 'crossinline ',
+        }
+
+        inlining_scope_str = INLINING_SCOPE_TO_KOTLIN[node.inlining_scope]
         vararg_str = 'vararg ' if node.vararg else ''
         # Recall that varargs ara actually arrays in the signature of
         # the corresponding parameters.
@@ -261,7 +270,7 @@ class KotlinTranslator(BaseTranslator):
             if node.vararg and isinstance(node.param_type,
                                           tp.ParameterizedType)
             else node.param_type)
-        res = node.inlining_scope + vararg_str + node.name + ": " + self.get_type_name(param_type)
+        res = inlining_scope_str + vararg_str + node.name + ": " + self.get_type_name(param_type)
         if len(children):
             children_res = self.pop_children_res(children)
             res += " = " + children_res[0]

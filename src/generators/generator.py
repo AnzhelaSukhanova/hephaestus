@@ -190,13 +190,10 @@ class Generator():
             if t_param.bound:
                 t_param.bound = tp.substitute_type(t_param.bound, replaced)
 
-    def _set_initial_inlining_scope(self,
+    def _set_initial_inlining_scope_for_inline_functions(self,
                                     param: ast.ParameterDeclaration):
-        inlining_scope = ast.InliningScope.INLINE
         if param.param_type.is_function_type():
-            inlining_scope = ast.InliningScope.INLINE
-
-        param.inlining_scope = inlining_scope
+            param.inlining_scope = ast.InliningScope.NOINLINE
 
     def gen_func_decl(self,
                       etype:tp.Type=None,
@@ -308,7 +305,7 @@ class Generator():
             )
         if is_inline:
             for p in params:
-                self._set_initial_inlining_scope(p)
+                self._set_initial_inlining_scope_for_inline_functions(p)
         ret_type = self._get_func_ret_type(params, etype, not_void=not_void)
         if is_interface or (abstract and ut.random.bool()):
             body, inferred_type = None, None
