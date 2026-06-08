@@ -261,7 +261,7 @@ class KotlinTranslator(BaseTranslator):
             if node.vararg and isinstance(node.param_type,
                                           tp.ParameterizedType)
             else node.param_type)
-        res = vararg_str + node.name + ": " + self.get_type_name(param_type)
+        res = node.inlining_scope + vararg_str + node.name + ": " + self.get_type_name(param_type)
         if len(children):
             children_res = self.pop_children_res(children)
             res += " = " + children_res[0]

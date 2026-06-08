@@ -29,6 +29,7 @@ from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
 from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt
+from src.ir.ast import ParameterDeclaration
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
@@ -189,6 +190,14 @@ class Generator():
             if t_param.bound:
                 t_param.bound = tp.substitute_type(t_param.bound, replaced)
 
+    def _set_initial_inlining_scope(self,
+                                    param: ast.ParameterDeclaration):
+        inlining_scope = ast.InliningScope.INLINE
+        if param.param_type.is_function_type():
+            inlining_scope = ast.InliningScope.INLINE
+
+        param.inlining_scope = inlining_scope
+
     def gen_func_decl(self,
                       etype:tp.Type=None,
                       not_void=False,
@@ -244,6 +253,7 @@ class Generator():
         nested_function = (len(self.namespace) > 1 and
                            self.namespace[-2] != 'global' and
                            self.namespace[-2][0].islower())
+        # All the functions that are inlineable are inlined
         is_inline = (not abstract and
                      not nested_function and
                      not (class_method and not class_is_final) and
@@ -278,6 +288,7 @@ class Generator():
 
         # Track if we're inside an inline function (for Kotlin local function restriction)
         # Must be set before generating params (default values may contain lambdas)
+        # Notice: it's not that previous func was inside inline, but the previous state of the inside_inline, before we assign it
         prev_inside_inline = self._inside_inline_function
         if is_inline:
             self._inside_inline_function = True
@@ -295,6 +306,9 @@ class Generator():
                 )
                 else self._gen_func_params_with_default()
             )
+        if is_inline:
+            for p in params:
+                self._set_initial_inlining_scope(p)
         ret_type = self._get_func_ret_type(params, etype, not_void=not_void)
         if is_interface or (abstract and ut.random.bool()):
             body, inferred_type = None, None
@@ -324,6 +338,7 @@ class Generator():
             body = self._gen_func_body(ret_type, func)
         func.body = body
 
+        # Restores to the previous state, possibly clearing inline flag from generator if we exit all the inline functions
         self._inside_inline_function = prev_inside_inline
         self._inside_java_lambda = prev_inside_java_lamdba
         self.depth = initial_depth
@@ -2620,6 +2635,7 @@ class Generator():
             log(self.logger, msg)
             return gu.AttrAccessInfo(None, {}, func, func_type_var_map)
         # Generate a class containing the requested function
+        # Class is not generated as local class, fine for inlining
         return self._gen_matching_class(etype, 'functions',
                                         signature=signature)
 
