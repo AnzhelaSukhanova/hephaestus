@@ -10,6 +10,34 @@ class Context():
         self._context = {}
         # A lookup from declarations to namespaces
         self._namespaces = {}
+        self._call_stack = []
+
+    def push_call_context(self, callcontext):
+        self._call_stack.append(callcontext)
+
+    def pop_call_context(self):
+        if not self._call_stack:
+            return None
+        return self._call_stack.pop()
+
+    def current_call_context(self):
+        if not self._call_stack:
+            return None
+        return self._call_stack[-1]
+
+    def call_contaxt_stack_suffix_types(self, *frame_types) -> bool:
+        stack = self._call_stack
+        n = len(frame_types)
+
+        if len(stack) < n:
+            return False
+
+        suffix = stack[-n:]
+        return all(isinstance(frame, expected)
+                   for frame, expected in zip(suffix, frame_types))
+
+    def call_context_tail(self, limit: int = 4):
+        return tuple(self._call_stack[-limit:])
 
     def _add_entity(self, namespace, entity, name, value):
         if namespace in self._context:

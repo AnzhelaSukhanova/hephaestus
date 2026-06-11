@@ -9,7 +9,7 @@ compiler = f'$HOME/kotlin/{"kotlin-native/dist" if is_native else "dist/kotlinc"
 
 class KotlinCompiler(BaseCompiler):
     ERROR_REGEX = re.compile(
-        r'([:\\a-zA-Z0-9\/_]+.kt):\d+:\d+:[ ]+error:[ ]+(.*)')
+        r'([:\\a-zA-Z0-9\/_]+\.kt):(\d+):(\d+):\s+error:\s+(.*)')
     CRASH_REGEX = re.compile(
         r'(org\.jetbrains\..*)\n(.*)',
         re.MULTILINE
@@ -39,4 +39,4 @@ class KotlinCompiler(BaseCompiler):
         return match[0]
 
     def get_error_msg(self, match):
-        return match[1]
+        return f"{match[1]}:{match[2]}: {match[3]}"

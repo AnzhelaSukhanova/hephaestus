@@ -20,8 +20,10 @@ TODOs:
 """
 # pylint: disable=too-many-instance-attributes,too-many-arguments,dangerous-default-value
 import functools
+from abc import ABC
 from collections import defaultdict
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Tuple, List, Callable
 
 from src import utils as ut
@@ -35,6 +37,24 @@ from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
 from src.modules.logging import Logger, log
 
+from src.debug_tools import called_by_suffix, call_stack_tail
+
+@dataclass(frozen=True)
+class CallContext(ABC):
+    pass
+
+@dataclass(frozen=True)
+class FunctionCallParamGeneration(CallContext):
+    callee: ast.FunctionDeclaration
+    target_param: ast.ParameterDeclaration
+
+@dataclass(frozen=True)
+class FunctionBodyGeneration(CallContext):
+    callee: ast.FunctionDeclaration
+
+@dataclass(frozen=True)
+class ExprCallSite(CallContext):
+    pass
 
 class Generator():
     # TODO document
@@ -193,7 +213,11 @@ class Generator():
     def _set_initial_inlining_scope_for_inline_functions(self,
                                     param: ast.ParameterDeclaration):
         if param.param_type.is_function_type():
-            param.inlining_scope = ast.InliningScope.NOINLINE
+            param.inlining_scope = ast.InliningScope.INLINE
+
+    def _escalate_inline_param(self,
+                               param: ast.ParameterDeclaration):
+        param.inlining_scope = ast.InliningScope.NOINLINE
 
     def gen_func_decl(self,
                       etype:tp.Type=None,
@@ -868,7 +892,49 @@ class Generator():
             return class_decl.get_callable_functions(class_decls)
         return class_decl.get_all_fields(class_decls)
 
+    # This function respects call sites, and when generate_expr tries to redo generation on failure, it doesn't add new ExprCallSites
     def generate_expr(self,
+                      expr_type: tp.Type=None,
+                      only_leaves=False,
+                      subtype=True,
+                      exclude_var=False,
+                      gen_bottom=False,
+                      sam_coercion=False) -> ast.Expr:
+        """Generate an expression.
+
+        This function could produce new nodes external to the generated
+        expression as a side effect. For instance, it could generate new
+        variable declarations.
+
+        Args:
+            expr_type: The type that the expression should have.
+            only_leaves: do not generate new leaves except from `expr`.
+            subtype: The type of the generated expression could be a subtype
+                of `expr_type`.
+            exclude_var: if this option is false, then it could assign the
+                generated expression into a variable, and return that
+                variable reference.
+            gen_bottom: Generate a bottom constant.
+            sam_coercion: Enable sam coercion.
+
+        Returns:
+            The generated expression.
+        """
+
+        self.context.push_call_context(ExprCallSite())
+        try:
+            expr = self._generate_expr(expr_type=expr_type,
+                                    only_leaves=only_leaves,
+                                    subtype=subtype,
+                                    exclude_var=exclude_var,
+                                    gen_bottom=gen_bottom,
+                                    sam_coercion=sam_coercion)
+        finally:
+            self.context.pop_call_context()
+
+        return expr
+
+    def _generate_expr(self,
                       expr_type: tp.Type=None,
                       only_leaves=False,
                       subtype=True,
@@ -1122,10 +1188,30 @@ class Generator():
             fun = lambda v, t: v.get_type() == t
         variables = [v for v in variables if fun(v, etype)]
         if not variables:
-            return self.generate_expr(etype, only_leaves=only_leaves,
+            # Internal retries don't change ExprCallSite
+            return self._generate_expr(etype, only_leaves=only_leaves,
                                       subtype=subtype, exclude_var=True)
-        varia = ut.random.choice([v.name for v in variables])
-        return ast.Variable(varia)
+        # We want to access it first, before returning the name
+        varia = ut.random.choice(variables)
+        if isinstance(varia, ast.ParameterDeclaration) and varia.inlining_scope == ast.InliningScope.INLINE:
+            valid_usage_of_inline_param = False
+            debug_param_str = ""
+
+            if self.context.call_contaxt_stack_suffix_types(FunctionCallParamGeneration, ExprCallSite):
+                # Direct call from FunctionCallParamGeneration
+                # TODO: is there a better way?
+                assert isinstance(self.context._call_stack[-2], FunctionCallParamGeneration)
+                debug_param_str = "(param) " + self.context._call_stack[-2].target_param.inlining_scope.name + " " + str(self.context._call_stack[-2].target_param.get_type())
+                if self.context._call_stack[-2].target_param.inlining_scope == ast.InliningScope.INLINE:
+                    # The only case, where inline parameter can be returned by ast.Variable(...) without needing to change to noinline
+                    valid_usage_of_inline_param = True
+
+            if not valid_usage_of_inline_param:
+                # Escalate inline param to prevent compiler error
+                print("inline escalated:", debug_param_str, "(call_context)", self.context.call_context_tail(2), ", (debugger)", call_stack_tail(6))
+                called_by_suffix("_gen_func_call", "generate_expr", "_generate_expr", 'gen_variable', 'gen_variable')
+                self._escalate_inline_param(param=varia)
+        return ast.Variable(varia.name)
 
     def gen_array_expr(self,
                        expr_type: tp.Type,
@@ -1345,6 +1431,7 @@ class Generator():
             if (
                 # We can smart cast local variables that are final, have
                 # explicit types, and are not overridable.
+                # Inline param is never here, as it is ast.ParameterDeclaration
                 isinstance(v, ast.VariableDeclaration) and
                 getattr(v, 'is_final', True) and
                 not v.is_type_inferred and
@@ -1352,7 +1439,8 @@ class Generator():
             )
         ]
         if not final_vars:
-            return self.generate_expr(expr_type, only_leaves=True,
+            # Internal retries don't change ExprCallSite
+            return self._generate_expr(expr_type, only_leaves=True,
                                       subtype=subtype)
         prev_depth = self.depth
         self.depth += 3
@@ -1362,7 +1450,8 @@ class Generator():
                                     include_self=False, concrete_only=True)
         subtypes = self._filter_subtypes(subtypes, var_type)
         if not subtypes:
-            return self.generate_expr(expr_type, only_leaves=True,
+            # Internal retries don't change ExprCallSite
+            return self._generate_expr(expr_type, only_leaves=True,
                                       subtype=subtype)
 
         subtype = ut.random.choice(subtypes)
@@ -1586,13 +1675,25 @@ class Generator():
             gen_bottom = expr_type.is_wildcard() or (
                 expr_type.is_parameterized() and expr_type.has_wildcards())
             if not param.vararg:
-                arg = self.generate_expr(expr_type, only_leaves,
-                                         gen_bottom=gen_bottom)
+                # The `inline fun ok(s: () -> Unit) { inner(s) }` will make `s` as gen_variable()
+                # Which is the same path that usually generates `inline fun bad(s: () -> Unit) = s` (illegal)
                 if param.default:
                     if self.language in ['kotlin', 'scala'] and ut.random.bool():
-                        # Randomly skip some default arguments.
+                        # Randomly skip some default arguments. This option is not skipping
+                        self.context.push_call_context(FunctionCallParamGeneration(func, param))
+                        try:
+                            arg = self.generate_expr(expr_type, only_leaves,
+                                                     gen_bottom=gen_bottom)
+                        finally:
+                            self.context.pop_call_context()
                         args.append(ast.CallArgument(arg, name=param.name))
                 else:
+                    self.context.push_call_context(FunctionCallParamGeneration(func, param))
+                    try:
+                        arg = self.generate_expr(expr_type, only_leaves,
+                                         gen_bottom=gen_bottom)
+                    finally:
+                        self.context.pop_call_context()
                     args.append(ast.CallArgument(arg))
 
             else:
@@ -2318,7 +2419,11 @@ class Generator():
             if ret_type == self.bt_factory.get_void_type()
             else ret_type
         )
-        expr = self.generate_expr(expr_type)
+        self.context.push_call_context(FunctionBodyGeneration(func))
+        try:
+            expr = self.generate_expr(expr_type)
+        finally:
+            self.context.pop_call_context()
         decls = list(self.context.get_declarations(
             self.namespace, True).values())
         var_decls = [d for d in decls
