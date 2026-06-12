@@ -1,4 +1,5 @@
 import re
+import tempfile
 
 from src.compilers.base import BaseCompiler
 from src.args import args as cli_args
@@ -29,8 +30,9 @@ class KotlinCompiler(BaseCompiler):
         else:
             is_wasm = backend == 'wasm'
             stdlib = f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
+            output_dir = tempfile.mkdtemp(prefix='hephaestus-klib-')
             return [compiler, self.input_name,
-                    '-ir-output-dir', 'dir',
+                    '-ir-output-dir', output_dir,
                     '-ir-output-name', 'library',
                     '-libraries', stdlib,
                     '-nowarn']
