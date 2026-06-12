@@ -390,7 +390,8 @@ class FunctionDeclaration(Declaration):
                  is_final=True,
                  is_inline=False,
                  override=False,
-                 type_parameters=[]):
+                 type_parameters=[],
+                 inherits_param_with_default=False):
         self.name = name
         self.params = params
         self.ret_type = ret_type
@@ -404,6 +405,7 @@ class FunctionDeclaration(Declaration):
             self.ret_type if inferred_type is None else inferred_type)
         assert self.inferred_type, ("The inferred_type of a function must"
                                     " not be None")
+        self.inherits_param_with_default = inherits_param_with_default
 
     def children(self):
         children = self.params + self.type_parameters

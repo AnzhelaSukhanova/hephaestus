@@ -347,6 +347,7 @@ class Generator():
             is_inline=is_inline,
             inferred_type=None,
             type_parameters=type_params,
+            inherits_param_with_default=inherits_param_with_default
         )
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:
@@ -730,14 +731,9 @@ class Generator():
             self._gen_type_params_from_existing(func, type_var_map)
         type_param_names = [t.name for t in type_params]
         ret_type = func.ret_type
-        inherits_param_with_default = False
+        inherits_param_with_default = func.inherits_param_with_default
         for p in params:
-            p.inherits_default_value = (
-                p.default is not None or
-                p.inherits_default_value
-            )
-
-            if p.inherits_default_value:
+            if p.default is not None:
                 inherits_param_with_default = True
             sub = False
             sub_type_map = {
