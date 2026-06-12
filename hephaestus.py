@@ -59,7 +59,8 @@ STATS = {
     },
     "time": 0,
     "compilation_time": 0,
-    "faults": {}
+    "faults": {},
+    "escalations": {},
 }
 TEMPLATE_MSG = (u"Test Programs Passed {} / {} \u2714\t\t"
                 "Test Programs Failed {} / {} \u2718\r")
@@ -171,13 +172,18 @@ def save_stats():
     dst_dir = os.path.join(cli_args.test_directory)
     faults_file = os.path.join(dst_dir, 'faults.json')
     stats_file = os.path.join(dst_dir, "stats.json")
+    escalations_file = os.path.join(dst_dir, "escalations.json")
     utils.mkdir(dst_dir)
     faults = STATS.pop('faults')
+    escalations = STATS.pop('escalations')
     with open(faults_file, 'w') as out:
         json.dump(faults, out, indent=2)
+    with open(escalations_file, 'w') as out:
+        json.dump(escalations, out, indent=2)
     with open(stats_file, 'w') as out:
         json.dump(STATS, out, indent=2)
     STATS['faults'] = faults
+    STATS['escalations'] = escalations
 
 
 def stop_condition(iteration, time_passed):
@@ -191,7 +197,7 @@ def stop_condition(iteration, time_passed):
     return True
 
 
-def update_stats(res, batch, batch_time):
+def update_stats(res, batch, batch_time, escalations=None):
     res, compilation_time = res
     failed = len(res)
     passed = batch - failed
@@ -200,6 +206,7 @@ def update_stats(res, batch, batch_time):
     STATS["time"] += batch_time
     STATS["compilation_time"] += compilation_time
     STATS['faults'].update(res)
+    STATS['escalations'].update(escalations or {})
     if not cli_args.debug:
         print_msg()
     save_stats()
@@ -266,6 +273,12 @@ def process_ncp_transformations(pid, dirname, translator, proc,
     save_program(program, program_str, dst_file2)
     return dst_file, injected_err
 
+def save_escalations(pid, escalations):
+    dst_file = os.path.join(cli_args.test_directory, 'tmp', str(pid), 'escalations.json')
+    utils.mkdir(os.path.dirname(dst_file))
+    with open(dst_file, 'w') as out:
+        json.dump(escalations, out, indent=2)
+
 
 def gen_program(pid, dirname, packages):
     """
@@ -296,6 +309,7 @@ def gen_program(pid, dirname, packages):
             )
         correct_program = process_cp_transformations(
             pid, dirname, translator, proc, program, packages[0])
+        save_escalations(pid, proc.escalations)
         stats = {
             'transformations': [t.get_name()
                                 for t in proc.get_transformations()],
@@ -304,6 +318,7 @@ def gen_program(pid, dirname, packages):
                 correct_program: True
             },
             "time": time.process_time() - start_time_gen,
+            "escalations": proc.escalations,
         }
         if not cli_args.only_correctness_preserving_transformations:
             incorrect_program = process_ncp_transformations(
@@ -519,8 +534,13 @@ def run():
 
         batch_time = functools.reduce(lambda acc, x: acc + x.stats["time"],
                                       res, 0)
+        batch_escalations = {
+            str(start_index + i): r.stats.get("escalations", [])
+            for i, r in enumerate(res)
+            if r.stats.get("escalations")
+        }
         res = ({}, 0) if cli_args.dry_run else check_oracle(testdir, oracles)
-        update_stats(res, batch, batch_time)
+        update_stats(res, batch, batch_time, batch_escalations)
 
     try:
         _run(process_program, process_res)
@@ -550,9 +570,14 @@ def run_parallel():
         batch_time = functools.reduce(lambda acc,
                                       x: acc + x.stats["time"],
                                       results, 0)
+        batch_escalations = {
+            str(start_index + i): r.stats.get("escalations", [])
+            for i, r in enumerate(results)
+            if r.stats.get("escalations")
+        }
 
         def update(res):
-            update_stats(res, batch, batch_time)
+            update_stats(res, batch, batch_time, batch_escalations)
 
         try:
             oracles = OrderedDict()

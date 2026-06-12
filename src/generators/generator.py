@@ -73,6 +73,7 @@ class Generator():
         self.namespace = ('global',)
         self.enable_pecs = not language == 'kotlin'
         self.disable_variance_functions = language == 'kotlin'
+        self.escalations = []
 
         # This flag is used for Java lambdas where local variables references
         # must be final.
@@ -1210,6 +1211,12 @@ class Generator():
             if not valid_usage_of_inline_param:
                 # Escalate inline param to prevent compiler error
                 print("inline escalated:", debug_param_str, "(call_context)", self.context.call_context_tail(2), ", (debugger)", call_stack_tail(6))
+                self._record_escalation(
+                    call_stack_semantic=self.context.call_context_tail(2),
+                    call_stack_debugger=call_stack_tail(6),
+                    escalated_param_inlining_scope=None if not debug_param_str else self.context._call_stack[-2].target_param.inlining_scope.name,
+                    escalated_details=None if not debug_param_str else str(self.context._call_stack[-2].target_param.get_type())
+                )
                 called_by_suffix("_gen_func_call", "generate_expr", "_generate_expr", 'gen_variable', 'gen_variable')
                 self._escalate_inline_param(param=varia)
         return ast.Variable(varia.name)
@@ -3093,3 +3100,16 @@ class Generator():
             type_param.variance = tp.Invariant
             type_var_map[type_var] = type_param
         return type_params, type_var_map, can_wildcard
+
+    def _record_escalation(self, call_stack_semantic, call_stack_debugger, escalated_param_inlining_scope=None, escalated_details=None):
+        escalation_log = {}
+        if escalated_param_inlining_scope is not None:
+            escalation_log["escalated_param_inlining_scope"] = escalated_param_inlining_scope
+        if escalated_details is not None:
+            escalation_log["escalated_details"] = escalated_details
+        escalation_log.update({
+            "call_stack_semantic": [str(frame) for frame in call_stack_semantic],
+            "call_stack_debugger": call_stack_debugger
+        })
+        self.escalations.append(escalation_log)
+

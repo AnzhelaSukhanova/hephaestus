@@ -31,6 +31,7 @@ class ProgramProcessor():
             ProgramProcessor.NCP_TRANSFORMATIONS.values())
         self.transformation_schedule = self._get_transformation_schedule()
         self.current_transformation = 0
+        self.escalations = []
 
     def _apply_transformation(self, transformation_cls,
                               transformation_number, program):
@@ -96,6 +97,7 @@ class ProgramProcessor():
             logger=logger,
             options=self.args.options["Generator"])
         program = generator.generate()
+        self.escalations = generator.escalations
         return program, True
 
     def can_transform(self):
