@@ -732,7 +732,12 @@ class Generator():
         ret_type = func.ret_type
         inherits_param_with_default = False
         for p in params:
-            if p.default is not None:
+            p.inherits_default_value = (
+                p.default is not None or
+                p.inherits_default_value
+            )
+
+            if p.inherits_default_value:
                 inherits_param_with_default = True
             sub = False
             sub_type_map = {

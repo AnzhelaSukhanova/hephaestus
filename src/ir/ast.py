@@ -333,12 +333,14 @@ class ParameterDeclaration(Declaration):
                  param_type: types.Type,
                  vararg: bool = False,
                  default: Expr = None,
-                 inlining_scope: InliningScope = InliningScope.DEFAULT):
+                 inlining_scope: InliningScope = InliningScope.DEFAULT,
+                 inherits_default_value: bool = False):
         self.name = name
         self.param_type = param_type
         self.vararg = vararg
         self.default = default
         self.inlining_scope = inlining_scope
+        self.inherits_default_value = inherits_default_value
 
     def children(self):
         if self.default:
