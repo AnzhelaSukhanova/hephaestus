@@ -70,6 +70,12 @@ parser.add_argument(
     help="Save all programs"
 )
 parser.add_argument(
+    "--keep-everything",
+    action="store_true",
+    help=("Save generator/transformation artifacts and preserve final "
+          "per-program directories for passed programs too")
+)
+parser.add_argument(
     "-S", "--print-stacktrace",
     action="store_true",
     help="When an error occurs print stack trace"
@@ -183,6 +189,9 @@ parser.add_argument(
 
 
 args = parser.parse_args()
+
+if args.keep_everything:
+    args.keep_all = True
 
 
 args.test_directory = os.path.join(args.bugs, args.name)

@@ -168,6 +168,13 @@ def save_program(program, program_str, program_file):
     utils.dump_program(program_file + ".bin", program)
 
 
+def preserve_final_program_dir(pid):
+    src_dir = os.path.join(cli_args.test_directory, 'tmp', str(pid))
+    dst_dir = os.path.join(cli_args.test_directory, str(pid))
+    if os.path.exists(src_dir):
+        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
+
 def save_stats():
     dst_dir = os.path.join(cli_args.test_directory)
     faults_file = os.path.join(dst_dir, 'faults.json')
@@ -430,9 +437,7 @@ def check_oracle(dirname, oracles):
             print('We found compiler crash')
         for pid, proc_res in oracles.items():
             if not proc_res.failed:
-                shutil.copytree(
-                    os.path.join(cli_args.test_directory, 'tmp', str(pid)),
-                    os.path.join(cli_args.test_directory, str(pid)))
+                preserve_final_program_dir(pid)
                 proc_res.stats['error'] = compiler.crash_msg
                 output[pid] = proc_res.stats
         return output, compilation_time
@@ -457,9 +462,7 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
-                shutil.copytree(
-                    os.path.join(cli_args.test_directory, 'tmp', str(pid)),
-                    os.path.join(cli_args.test_directory, str(pid)))
+                preserve_final_program_dir(pid)
                 if stop:
                     print(proc_res.stats['error'])
                     sys.exit(1)
@@ -476,9 +479,9 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
-                shutil.copytree(
-                    os.path.join(cli_args.test_directory, 'tmp', str(pid)),
-                    os.path.join(cli_args.test_directory, str(pid)))
+                preserve_final_program_dir(pid)
+        if cli_args.keep_everything:
+            preserve_final_program_dir(pid)
         shutil.rmtree(os.path.join(cli_args.test_directory, 'tmp',
                                    str(pid)))
     # Clear the directory of programs.
