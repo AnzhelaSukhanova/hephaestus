@@ -382,6 +382,14 @@ def _report_failed(pid, tid, compiler, oracle):
         prev_file = program_file
         tid -= 1
 
+def enrich_error(compiler, err_file):
+    command_outputs = {}
+
+    for name, command in compiler.get_error_enrichment_cmds(err_file).items():
+        _, output = run_command(command)
+        command_outputs[name] = output
+
+    return compiler.analyze_error_enrichment_output(err_file, command_outputs)
 
 def check_oracle(dirname, oracles):
     """
@@ -439,6 +447,7 @@ def check_oracle(dirname, oracles):
                 # Here the program should be compiled successfully. However,
                 # it's in the list of the error messages.
                 proc_res.stats['error'] = '\n'.join(failed[program])
+                proc_res.stats.update(enrich_error(compiler, err_file=program))
                 output[pid] = proc_res.stats
                 stop = False
                 if cli_args.debug:

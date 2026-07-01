@@ -39,3 +39,9 @@ class BaseCompiler():
             error_msg = self.get_error_msg(match)
             failed[filename].append(error_msg)
         return failed, matches
+
+    def get_error_enrichment_cmds(self, err_file):
+        return {}
+
+    def analyze_error_enrichment_output(self, err_file, command_outputs):
+        return {}
