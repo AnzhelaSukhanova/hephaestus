@@ -175,6 +175,15 @@ def preserve_final_program_dir(pid):
         shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
 
+def preserve_ir_dump_to_tmp(dirname, pid):
+    if not cli_args.dump_ir:
+        return
+    src_ir = os.path.join(dirname, 'src', 'ir', 'src')
+    dst_ir = os.path.join(cli_args.test_directory, 'tmp', str(pid), 'ir')
+    if os.path.isdir(src_ir):
+        shutil.copytree(src_ir, dst_ir, dirs_exist_ok=True)
+
+
 def save_stats():
     dst_dir = os.path.join(cli_args.test_directory)
     faults_file = os.path.join(dst_dir, 'faults.json')
@@ -431,15 +440,16 @@ def check_oracle(dirname, oracles):
     failed, _ = compiler.analyze_compiler_output(err)
     if compiler.crash_msg:
         # We just found a compiler crash.
-        shutil.rmtree(dirname)
         output = {}
         if cli_args.debug:
             print('We found compiler crash')
         for pid, proc_res in oracles.items():
             if not proc_res.failed:
+                preserve_ir_dump_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
                 proc_res.stats['error'] = compiler.crash_msg
                 output[pid] = proc_res.stats
+        shutil.rmtree(dirname)
         return output, compilation_time
 
     output = {}
@@ -462,6 +472,7 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
+                preserve_ir_dump_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
                 if stop:
                     print(proc_res.stats['error'])
@@ -479,8 +490,10 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
+                preserve_ir_dump_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
         if cli_args.keep_everything:
+            preserve_ir_dump_to_tmp(dirname, pid)
             preserve_final_program_dir(pid)
         shutil.rmtree(os.path.join(cli_args.test_directory, 'tmp',
                                    str(pid)))
