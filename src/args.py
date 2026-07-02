@@ -186,6 +186,11 @@ parser.add_argument(
     help=("A file containing regular expressions for filtering compiler error "
           "messages")
 )
+parser.add_argument(
+    "--dump-ir",
+    action="store_true",
+    help="Dump compiler IR for each saved program"
+)
 
 
 args = parser.parse_args()
@@ -258,6 +263,9 @@ def validate_args(args):
 
     if args.examine and not args.replay:
         sys.exit("You cannot use --examine option without the --replay option")
+
+    if args.dump_ir and args.batch != 1:
+        sys.exit("You cannot use --dump-ir option with the option --batch != 1")
 
 
 def pre_process_args(args):

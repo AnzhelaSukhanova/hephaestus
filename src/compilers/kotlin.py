@@ -1,5 +1,4 @@
 import re
-import tempfile
 
 from src.compilers.base import BaseCompiler
 from src.args import args as cli_args
@@ -29,7 +28,9 @@ class KotlinCompiler(BaseCompiler):
 
     def get_compiler_cmd(self):
         # The problem is that for get_phases_compiler_cmd we want to provide concrete filename, but self.input_name usually stores whole folder for compilation (batch)
-        return self._get_compiler_cmd(self.input_name)
+        # And also we want to use _get_compiler_cmd as a base, so don't attach dump_ir_flags to it directly
+        dump_ir_flags = ['-Xphases-to-dump=ALL', '-Xdump-directory=' + self.input_name + '/ir'] if cli_args.dump_ir  else []
+        return self._get_compiler_cmd(self.input_name) + dump_ir_flags
 
     def _get_compiler_cmd(self, input_name):
         if is_native:
@@ -38,10 +39,9 @@ class KotlinCompiler(BaseCompiler):
         else:
             is_wasm = backend == 'wasm'
             stdlib = f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
-            output_dir = tempfile.mkdtemp(prefix='hephaestus-klib-')
             return [compiler, input_name,
-                    '-ir-output-dir', output_dir,
-                    '-ir-output-name', 'library',
+                    '-ir-output-dir', input_name,
+                    '-ir-output-name', 'src',
                     '-libraries', stdlib,
                     '-nowarn']
 
