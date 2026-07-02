@@ -18,6 +18,7 @@ class KotlinCompiler(BaseCompiler):
         r'^[A-Za-z][A-Za-z0-9_$]*: [0-9]+ msec$',
         re.MULTILINE
     )
+    IR_MODIFYING_INLINER_PHASES = 'LocalClassesInInlineLambdasLowering,PreSerializationPrivateFunctionInlining,OuterThisInInlineFunctionsSpecialAccessorLowering,SyntheticAccessorLowering,FunctionInlining,InlineFunctionSerializationPreProcessing,RedundantCastsRemoverLowering'
 
     def __init__(self, input_name, filter_patterns=None):
         super().__init__(input_name, filter_patterns)
@@ -29,7 +30,7 @@ class KotlinCompiler(BaseCompiler):
     def get_compiler_cmd(self):
         # The problem is that for get_phases_compiler_cmd we want to provide concrete filename, but self.input_name usually stores whole folder for compilation (batch)
         # And also we want to use _get_compiler_cmd as a base, so don't attach dump_ir_flags to it directly
-        dump_ir_flags = ['-Xphases-to-dump=ALL', '-Xdump-directory=' + self.input_name + '/ir'] if cli_args.dump_ir  else []
+        dump_ir_flags = ['-Xphases-to-dump=' + self.IR_MODIFYING_INLINER_PHASES, '-Xdump-directory=' + self.input_name + '/ir'] if cli_args.dump_ir  else []
         return self._get_compiler_cmd(self.input_name) + dump_ir_flags
 
     def _get_compiler_cmd(self, input_name):
