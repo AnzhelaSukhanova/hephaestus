@@ -191,6 +191,11 @@ parser.add_argument(
     action="store_true",
     help="Dump compiler IR for each saved program"
 )
+parser.add_argument(
+    "--time-metrics",
+    action="store_true",
+    help="Record per-program generation, compilation, and profiling timings"
+)
 
 
 args = parser.parse_args()
@@ -266,6 +271,9 @@ def validate_args(args):
 
     if args.dump_ir and args.batch != 1:
         sys.exit("You cannot use --dump-ir option with the option --batch != 1")
+
+    if args.time_metrics and args.batch != 1:
+        sys.exit("You cannot use --time-metrics with --batch != 1")
 
 
 def pre_process_args(args):

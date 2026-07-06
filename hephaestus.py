@@ -61,6 +61,7 @@ STATS = {
     "compilation_time": 0,
     "faults": {},
     "escalations": {},
+    "time_metrics": {},
 }
 TEMPLATE_MSG = (u"Test Programs Passed {} / {} \u2714\t\t"
                 "Test Programs Failed {} / {} \u2718\r")
@@ -150,6 +151,12 @@ def run_command(arguments, get_stdout=True):
     return status, err
 
 
+def timed(fn, *args, **kwargs):
+    start = time.perf_counter()
+    result = fn(*args, **kwargs)
+    return result, time.perf_counter() - start
+
+
 def get_generator_dir(pid):
     return os.path.join(cli_args.test_directory, "generator",
                         "iter_" + str(pid))
@@ -189,17 +196,23 @@ def save_stats():
     faults_file = os.path.join(dst_dir, 'faults.json')
     stats_file = os.path.join(dst_dir, "stats.json")
     escalations_file = os.path.join(dst_dir, "escalations.json")
+    time_metrics_file = os.path.join(dst_dir, "time_metrics.json")
     utils.mkdir(dst_dir)
     faults = STATS.pop('faults')
     escalations = STATS.pop('escalations')
+    time_metrics = STATS.pop('time_metrics')
     with open(faults_file, 'w') as out:
         json.dump(faults, out, indent=2)
     with open(escalations_file, 'w') as out:
         json.dump(escalations, out, indent=2)
+    if cli_args.time_metrics:
+        with open(time_metrics_file, 'w') as out:
+            json.dump(time_metrics, out, indent=2)
     with open(stats_file, 'w') as out:
         json.dump(STATS, out, indent=2)
     STATS['faults'] = faults
     STATS['escalations'] = escalations
+    STATS['time_metrics'] = time_metrics
 
 
 def stop_condition(iteration, time_passed):
@@ -214,7 +227,7 @@ def stop_condition(iteration, time_passed):
 
 
 def update_stats(res, batch, batch_time, escalations=None):
-    res, compilation_time = res
+    res, compilation_time, time_metrics = res
     failed = len(res)
     passed = batch - failed
     STATS['totals']['failed'] += failed
@@ -223,6 +236,7 @@ def update_stats(res, batch, batch_time, escalations=None):
     STATS["compilation_time"] += compilation_time
     STATS['faults'].update(res)
     STATS['escalations'].update(escalations or {})
+    STATS['time_metrics'].update(time_metrics or {})
     if not cli_args.debug:
         print_msg()
     save_stats()
@@ -398,6 +412,7 @@ def _report_failed(pid, tid, compiler, oracle):
         prev_file = program_file
         tid -= 1
 
+
 def enrich_error(compiler, err_file):
     command_outputs = {}
 
@@ -406,6 +421,25 @@ def enrich_error(compiler, err_file):
         command_outputs[name] = output
 
     return compiler.analyze_error_enrichment_output(err_file, command_outputs)
+
+
+def get_time_metrics(oracles, compilation_time):
+    if not cli_args.time_metrics:
+        return {}
+    return {
+        pid: {
+            "generation_cpu": proc_res.stats.get("time", 0),
+            "compilation_with_ir_dumps": compilation_time,
+            "phase_profiling": 0.0
+        }
+        for pid, proc_res in oracles.items()
+    }
+
+
+def attach_time_metrics(pid, stats, time_metrics):
+    if cli_args.time_metrics:
+        stats["time_metrics"] = time_metrics[pid]
+
 
 def check_oracle(dirname, oracles):
     """
@@ -426,10 +460,9 @@ def check_oracle(dirname, oracles):
     filter_patterns = utils.path2set(cli_args.error_filter_patterns)
     compiler = COMPILERS[cli_args.language](filename, filter_patterns)
     command_args = compiler.get_compiler_cmd()
-    start_time = time.time()
     # At this point, we run the compiler
-    _, err = run_command(command_args)
-    compilation_time = time.time() - start_time
+    (_, err), compilation_time = timed(run_command, command_args)
+    time_metrics = get_time_metrics(oracles, compilation_time)
     # TODO In case there is an error in the compiler output and none of the
     # programs match with regex to that error, it means that something bad
     # happened. For example, heap space error. In that case, we should log a
@@ -448,13 +481,15 @@ def check_oracle(dirname, oracles):
                 preserve_ir_dump_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
                 proc_res.stats['error'] = compiler.crash_msg
+                attach_time_metrics(pid, proc_res.stats, time_metrics)
                 output[pid] = proc_res.stats
         shutil.rmtree(dirname)
-        return output, compilation_time
+        return output, compilation_time, time_metrics
 
     output = {}
     for pid, proc_res in oracles.items():
         if proc_res.failed:
+            attach_time_metrics(pid, proc_res.stats, time_metrics)
             output[pid] = proc_res.stats
             continue
         for program, oracle in proc_res.stats['programs'].items():
@@ -462,7 +497,12 @@ def check_oracle(dirname, oracles):
                 # Here the program should be compiled successfully. However,
                 # it's in the list of the error messages.
                 proc_res.stats['error'] = '\n'.join(failed[program])
-                proc_res.stats.update(enrich_error(compiler, err_file=program))
+                enrichment, phase_profiling = timed(
+                    enrich_error, compiler, err_file=program)
+                proc_res.stats.update(enrichment)
+                if cli_args.time_metrics:
+                    time_metrics[pid]["phase_profiling"] = phase_profiling
+                attach_time_metrics(pid, proc_res.stats, time_metrics)
                 output[pid] = proc_res.stats
                 stop = False
                 if cli_args.debug:
@@ -483,6 +523,7 @@ def check_oracle(dirname, oracles):
                 # the compiler managed to compile it successfully.
                 proc_res.stats['error'] = 'SHOULD NOT BE COMPILED: ' + \
                     proc_res.stats['error']
+                attach_time_metrics(pid, proc_res.stats, time_metrics)
                 output[pid] = proc_res.stats
                 if cli_args.debug:
                     msg = 'Mismatch found in program {}. Expected to fail'
@@ -499,18 +540,18 @@ def check_oracle(dirname, oracles):
                                    str(pid)))
     # Clear the directory of programs.
     shutil.rmtree(dirname)
-    return output, compilation_time
+    return output, compilation_time, time_metrics
 
 
 def check_oracle_mul(dirname, oracles):
     global STOP_COND
     if STOP_COND:
-        return {}, 0
+        return {}, 0, {}
     try:
         return check_oracle(dirname, oracles)
     except KeyboardInterrupt:
         STOP_COND = True
-        return {}, 0
+        return {}, 0, {}
     except Exception as exc:
         if cli_args.print_stacktrace:
             err = str(traceback.format_exc())
@@ -518,14 +559,14 @@ def check_oracle_mul(dirname, oracles):
             err = str(exc)
         print('Internal error while checking the oracle')
         print(err)
-        return {}, 0
+        return {}, 0, {}
 
 
 def _run(process_program, process_res):
     logging()
     iteration = 1
     time_passed = 0
-    start_time = time.time()
+    start_time = time.perf_counter()
     while stop_condition(iteration, time_passed):
         try:
             utils.random.reset_word_pool()
@@ -541,7 +582,7 @@ def _run(process_program, process_res):
 
             process_res(iteration, res, tmpdir, batches)
 
-            time_passed = time.time() - start_time
+            time_passed = time.perf_counter() - start_time
             iteration += batches
         except KeyboardInterrupt:
             return
@@ -564,7 +605,11 @@ def run():
             for i, r in enumerate(res)
             if r.stats.get("escalations")
         }
-        res = ({}, 0) if cli_args.dry_run else check_oracle(testdir, oracles)
+        res = (
+            ({}, 0, {})
+            if cli_args.dry_run
+            else check_oracle(testdir, oracles)
+        )
         update_stats(res, batch, batch_time, batch_escalations)
 
     try:
@@ -609,7 +654,7 @@ def run_parallel():
             for i, r in enumerate(results):
                 oracles[start_index + i] = r
             if cli_args.dry_run:
-                return update(({}, 2))
+                return update(({}, 0, {}))
             pool.apply_async(check_oracle_mul, args=(testdir, oracles),
                              callback=update)
         except KeyboardInterrupt:
