@@ -196,6 +196,12 @@ parser.add_argument(
     action="store_true",
     help="Record per-program generation, compilation, and profiling timings"
 )
+parser.add_argument(
+    "--disable-metrics",
+    action="store_true",
+    help=("Disable compiler error enrichment and phase profiling; "
+          "--time-metrics output is still recorded when requested")
+)
 
 
 args = parser.parse_args()

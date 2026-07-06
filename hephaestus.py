@@ -497,11 +497,12 @@ def check_oracle(dirname, oracles):
                 # Here the program should be compiled successfully. However,
                 # it's in the list of the error messages.
                 proc_res.stats['error'] = '\n'.join(failed[program])
-                enrichment, phase_profiling = timed(
-                    enrich_error, compiler, err_file=program)
-                proc_res.stats.update(enrichment)
-                if cli_args.time_metrics:
-                    time_metrics[pid]["phase_profiling"] = phase_profiling
+                if not cli_args.disable_metrics:
+                    enrichment, phase_profiling = timed(
+                        enrich_error, compiler, err_file=program)
+                    proc_res.stats.update(enrichment)
+                    if cli_args.time_metrics:
+                        time_metrics[pid]["phase_profiling"] = phase_profiling
                 attach_time_metrics(pid, proc_res.stats, time_metrics)
                 output[pid] = proc_res.stats
                 stop = False
