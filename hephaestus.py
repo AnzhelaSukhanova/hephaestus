@@ -203,8 +203,9 @@ def save_stats():
     time_metrics = STATS.pop('time_metrics')
     with open(faults_file, 'w') as out:
         json.dump(faults, out, indent=2)
-    with open(escalations_file, 'w') as out:
-        json.dump(escalations, out, indent=2)
+    if not cli_args.disable_metrics:
+        with open(escalations_file, 'w') as out:
+            json.dump(escalations, out, indent=2)
     if cli_args.time_metrics:
         with open(time_metrics_file, 'w') as out:
             json.dump(time_metrics, out, indent=2)
@@ -235,7 +236,8 @@ def update_stats(res, batch, batch_time, escalations=None):
     STATS["time"] += batch_time
     STATS["compilation_time"] += compilation_time
     STATS['faults'].update(res)
-    STATS['escalations'].update(escalations or {})
+    if not cli_args.disable_metrics:
+        STATS['escalations'].update(escalations or {})
     STATS['time_metrics'].update(time_metrics or {})
     if not cli_args.debug:
         print_msg()
@@ -339,7 +341,8 @@ def gen_program(pid, dirname, packages):
             )
         correct_program = process_cp_transformations(
             pid, dirname, translator, proc, program, packages[0])
-        save_escalations(pid, proc.escalations)
+        if not cli_args.disable_metrics:
+            save_escalations(pid, proc.escalations)
         stats = {
             'transformations': [t.get_name()
                                 for t in proc.get_transformations()],
@@ -348,8 +351,9 @@ def gen_program(pid, dirname, packages):
                 correct_program: True
             },
             "time": time.process_time() - start_time_gen,
-            "escalations": proc.escalations,
         }
+        if not cli_args.disable_metrics:
+            stats["escalations"] = proc.escalations
         if not cli_args.only_correctness_preserving_transformations:
             incorrect_program = process_ncp_transformations(
                 pid, dirname, translator, proc, program, packages[1])
@@ -601,11 +605,13 @@ def run():
 
         batch_time = functools.reduce(lambda acc, x: acc + x.stats["time"],
                                       res, 0)
-        batch_escalations = {
-            str(start_index + i): r.stats.get("escalations", [])
-            for i, r in enumerate(res)
-            if r.stats.get("escalations")
-        }
+        batch_escalations = {}
+        if not cli_args.disable_metrics:
+            batch_escalations = {
+                str(start_index + i): r.stats.get("escalations", [])
+                for i, r in enumerate(res)
+                if r.stats.get("escalations")
+            }
         res = (
             ({}, 0, {})
             if cli_args.dry_run
@@ -641,11 +647,13 @@ def run_parallel():
         batch_time = functools.reduce(lambda acc,
                                       x: acc + x.stats["time"],
                                       results, 0)
-        batch_escalations = {
-            str(start_index + i): r.stats.get("escalations", [])
-            for i, r in enumerate(results)
-            if r.stats.get("escalations")
-        }
+        batch_escalations = {}
+        if not cli_args.disable_metrics:
+            batch_escalations = {
+                str(start_index + i): r.stats.get("escalations", [])
+                for i, r in enumerate(results)
+                if r.stats.get("escalations")
+            }
 
         def update(res):
             update_stats(res, batch, batch_time, batch_escalations)

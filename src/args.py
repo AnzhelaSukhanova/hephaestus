@@ -199,8 +199,9 @@ parser.add_argument(
 parser.add_argument(
     "--disable-metrics",
     action="store_true",
-    help=("Disable compiler error enrichment and phase profiling; "
-          "--time-metrics output is still recorded when requested")
+    help=("Disable compiler error enrichment, phase profiling, and "
+          "escalation reports; --time-metrics output is still recorded "
+          "when requested")
 )
 
 
@@ -215,6 +216,7 @@ args.stop_cond = "timeout" if args.seconds else "iterations"
 args.temp_directory = os.path.join(cwd, "temp")
 args.options = {
     "Generator": {
+        "disable_metrics": args.disable_metrics
     },
     'Translator': {
         'cast_numbers': args.cast_numbers,
