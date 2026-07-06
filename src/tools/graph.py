@@ -1,4 +1,6 @@
 import argparse
+import colorsys
+import html
 import json
 import math
 import os
@@ -7,6 +9,18 @@ import time
 
 FRONTEND_PHASES = {"fir", "frontend"}
 BACKEND_PHASES = {"cb", "backend"}
+TIME_OVERLAY_COLORS = [
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+    "#ff7f0e",
+]
 
 
 def read_json_retry(path, attempts=20, delay=0.05):
@@ -154,6 +168,41 @@ def cumulative_time_points(time_metrics):
     return compilation_points, total_points
 
 
+def time_metrics_file(run_dir):
+    metrics_file = os.path.join(run_dir, "time_metrics.json")
+    if not os.path.exists(metrics_file):
+        raise SystemExit(
+            f"Missing time_metrics.json in {run_dir}; run Hephaestus with "
+            "--time-metrics")
+    return metrics_file
+
+
+def read_time_metrics(run_dir):
+    time_metrics = read_json_retry(time_metrics_file(run_dir))
+    if not time_metrics:
+        raise SystemExit(
+            f"Empty time_metrics.json in {run_dir}; run Hephaestus with "
+            "--time-metrics")
+    return time_metrics
+
+
+def run_name(run_dir):
+    return os.path.basename(os.path.normpath(run_dir)) or run_dir
+
+
+def series_colors(count):
+    if count <= len(TIME_OVERLAY_COLORS):
+        return TIME_OVERLAY_COLORS[:count]
+
+    colors = []
+    for idx in range(count):
+        red, green, blue = colorsys.hsv_to_rgb(idx / count, 0.72, 0.68)
+        colors.append(
+            "#{:02x}{:02x}{:02x}".format(
+                int(red * 255), int(green * 255), int(blue * 255)))
+    return colors
+
+
 def write_svg(points, out_file, frontend_ids=None, backend_ids=None,
               width=1200, height=700):
     margin = 70
@@ -284,6 +333,78 @@ def write_time_svg(compilation_points, total_points, out_file,
         f.write("\n".join(parts))
 
 
+def write_time_overlay_svg(series, out_file, width=1200, height=700):
+    margin = 90
+    max_x = max(max(x for x, _ in points) for _, points in series) or 1
+    max_y = max(max(y for _, y in points) for _, points in series) or 1
+
+    def sx(x):
+        return margin + x * (width - 2 * margin) / max_x
+
+    def sy(y):
+        return height - margin - y * (height - 2 * margin) / max_y
+
+    def polyline(points):
+        return " ".join(f"{sx(x):.2f},{sy(y):.2f}" for x, y in points)
+
+    x_ticks = nice_ticks(max_x)
+    y_ticks = nice_time_ticks(max_y)
+    colors = series_colors(len(series))
+    legend_x = width - margin - 360
+    legend_y = margin + 10
+    legend_step = 24
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+    ]
+
+    for x in x_ticks:
+        px = sx(x)
+        parts.append(
+            f'<line x1="{px:.2f}" y1="{margin}" x2="{px:.2f}" y2="{height - margin}" stroke="#e5e5e5"/>'
+        )
+        parts.append(
+            f'<text x="{px:.2f}" y="{height - margin + 22}" text-anchor="middle" font-size="12">{x}</text>'
+        )
+
+    for y in y_ticks:
+        py = sy(y)
+        label = format_seconds(y)
+        parts.append(
+            f'<line x1="{margin}" y1="{py:.2f}" x2="{width - margin}" y2="{py:.2f}" stroke="#e5e5e5"/>'
+        )
+        parts.append(
+            f'<text x="{margin - 12}" y="{py + 4:.2f}" text-anchor="end" font-size="12">{label}</text>'
+        )
+
+    parts.extend([
+        f'<line x1="{margin}" y1="{height - margin}" x2="{width - margin}" y2="{height - margin}" stroke="black"/>',
+        f'<line x1="{margin}" y1="{margin}" x2="{margin}" y2="{height - margin}" stroke="black"/>',
+    ])
+
+    for (name, points), color in zip(series, colors):
+        parts.append(
+            f'<polyline points="{polyline(points)}" fill="none" stroke="{color}" stroke-width="2"/>'
+        )
+
+    for idx, ((name, _), color) in enumerate(zip(series, colors)):
+        y = legend_y + idx * legend_step
+        parts.extend([
+            f'<line x1="{legend_x}" y1="{y}" x2="{legend_x + 34}" y2="{y}" stroke="{color}" stroke-width="2"/>',
+            f'<text x="{legend_x + 44}" y="{y + 4}" font-size="13">{html.escape(name)}</text>',
+        ])
+
+    parts.extend([
+        f'<text x="{width / 2}" y="{height - 20}" text-anchor="middle" font-size="14">program n</text>',
+        f'<text x="18" y="{height / 2}" transform="rotate(-90 18,{height / 2})" text-anchor="middle" font-size="14">cumulative compilation + metrics seconds</text>',
+        '</svg>',
+    ])
+
+    with open(out_file, "w") as f:
+        f.write("\n".join(parts))
+
+
 def graph_n_common(run_dir):
     stats = read_json_retry(os.path.join(run_dir, "stats.json"))
     faults = read_json_retry(os.path.join(run_dir, "faults.json"))
@@ -297,35 +418,47 @@ def graph_n_common(run_dir):
 
 
 def graph_time(run_dir):
-    metrics_file = os.path.join(run_dir, "time_metrics.json")
-    if not os.path.exists(metrics_file):
-        raise SystemExit(
-            "Missing time_metrics.json; run Hephaestus with --time-metrics")
-
-    time_metrics = read_json_retry(metrics_file)
-    if not time_metrics:
-        raise SystemExit(
-            "Empty time_metrics.json; run Hephaestus with --time-metrics")
-
+    time_metrics = read_time_metrics(run_dir)
     compilation_points, total_points = cumulative_time_points(time_metrics)
     out_file = os.path.join(run_dir, "graph_time.svg")
     write_time_svg(compilation_points, total_points, out_file)
     return out_file
 
 
+def graph_time_overlay(run_dirs, out_file):
+    series = []
+    for run_dir in run_dirs:
+        time_metrics = read_time_metrics(run_dir)
+        compilation_points, _ = cumulative_time_points(time_metrics)
+        series.append((run_name(run_dir), compilation_points))
+
+    write_time_overlay_svg(series, out_file)
+    return out_file
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("graph", choices=["n_common", "time"])
-    parser.add_argument("run_dir")
+    parser.add_argument("graph", choices=["n_common", "time", "time_overlay"])
+    parser.add_argument("run_dirs", nargs="+")
+    parser.add_argument(
+        "-o", "--output",
+        default=os.path.abspath("graph_time_overlay.svg"))
     args = parser.parse_args()
 
-    run_dir = os.path.abspath(args.run_dir)
+    run_dirs = [os.path.abspath(run_dir) for run_dir in args.run_dirs]
+
+    if args.graph in {"n_common", "time"} and len(run_dirs) != 1:
+        raise SystemExit(
+            f"{args.graph} expects exactly one run directory")
 
     if args.graph == "n_common":
-        out_file = graph_n_common(run_dir)
+        out_file = graph_n_common(run_dirs[0])
         print(out_file)
     elif args.graph == "time":
-        out_file = graph_time(run_dir)
+        out_file = graph_time(run_dirs[0])
+        print(out_file)
+    elif args.graph == "time_overlay":
+        out_file = graph_time_overlay(run_dirs, os.path.abspath(args.output))
         print(out_file)
 
 
