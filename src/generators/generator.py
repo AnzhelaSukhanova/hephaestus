@@ -349,7 +349,10 @@ class Generator():
             is_inline=is_inline,
             inferred_type=None,
             type_parameters=type_params,
-            inherits_param_with_default=inherits_param_with_default
+            inherits_param_with_default=inherits_param_with_default,
+            visibility=(ast.Visibility.DEFAULT
+                        if not class_method
+                        else ast.Visibility.PRIVATE),
         )
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:

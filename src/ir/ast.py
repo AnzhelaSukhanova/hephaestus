@@ -319,6 +319,7 @@ class CallArgument(Node):
             return (self.name == other.name and
                     self.expr.is_equal(other.is_equal))
         return False
+
 # For now, "InliningScope" (similarly to func.is_inline ) is generated for every param in every language
 from enum import Enum, auto
 class InliningScope(Enum):
@@ -327,6 +328,14 @@ class InliningScope(Enum):
     NOINLINE = auto()
     CROSSINLINE = auto()
 
+# TODO: Handle INTERNAL, PROTECTED, etc
+# DEFAULT means that AST node doesn't have visibility modifier, real visibility should
+class Visibility(Enum):
+    DEFAULT = auto()
+    PUBLIC = auto()
+    PROTECTED = auto()
+    INTERNAL = auto()
+    PRIVATE = auto()
 
 class ParameterDeclaration(Declaration):
     def __init__(self, name: str,
@@ -391,7 +400,8 @@ class FunctionDeclaration(Declaration):
                  is_inline=False,
                  override=False,
                  type_parameters=[],
-                 inherits_param_with_default=False):
+                 inherits_param_with_default=False,
+                 visibility=Visibility.DEFAULT):
         self.name = name
         self.params = params
         self.ret_type = ret_type
@@ -406,6 +416,7 @@ class FunctionDeclaration(Declaration):
         assert self.inferred_type, ("The inferred_type of a function must"
                                     " not be None")
         self.inherits_param_with_default = inherits_param_with_default
+        self.visibility = visibility
 
     def children(self):
         children = self.params + self.type_parameters
