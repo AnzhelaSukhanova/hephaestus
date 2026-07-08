@@ -133,6 +133,15 @@ def read_phase_csv(csv_file):
         return reader.fieldnames or [], list(reader)
 
 
+def ensure_default_phase_csv(run_dir, csv_file, explicit_csv):
+    if csv_file.exists() or explicit_csv:
+        return
+    raise SystemExit(
+        "Missing IR phase CSV: {}\n"
+        "Create it explicitly with: python -m src.tools.ir_csv "
+        "phase_changes {}".format(csv_file, run_dir))
+
+
 def select_rows(fieldnames, rows, columns):
     missing_columns = [column for column in columns
                        if column not in fieldnames]
@@ -436,6 +445,7 @@ def main():
     columns = lowering_columns(args.lowerings)
     csv_file = Path(args.csv_file).resolve() if args.csv_file else (
         run_dir / DEFAULT_OUTPUT)
+    ensure_default_phase_csv(run_dir, csv_file, bool(args.csv_file))
     output_dir = Path(args.output_dir).resolve() if args.output_dir else (
         default_output_dir(run_dir, columns))
 

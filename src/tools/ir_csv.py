@@ -16,6 +16,7 @@ PHASES = [
     ("15", "RedundantCastsRemoverLowering"),
 ]
 DEFAULT_OUTPUT = "ir_phase_changes.csv"
+IR_CHANGES_FILENAME = "ir_changes.json"
 
 
 def read_json_retry(path, attempts=20, delay=0.05):
@@ -51,22 +52,40 @@ def program_kind(pid, faults):
     return None
 
 
-def read_without_first_line(path):
-    with open(path, "rb") as f:
-        f.readline()
-        return f.read()
-
-
-def phase_changed(ir_dir, phase_no, phase_name):
-    before = os.path.join(ir_dir, f"{phase_no}_BEFORE.{phase_name}.ir")
-    after = os.path.join(ir_dir, f"{phase_no}_AFTER.{phase_name}.ir")
-    if not os.path.exists(before) or not os.path.exists(after):
-        return "None"
-    return "1" if read_without_first_line(before) != read_without_first_line(after) else "0"
-
-
 def phase_column(phase_no, phase_name):
     return f"{phase_no}_{phase_name}"
+
+
+def read_ir_changes(program_dir):
+    changes_file = os.path.join(program_dir, IR_CHANGES_FILENAME)
+    if not os.path.exists(changes_file):
+        raise SystemExit(
+            "Missing IR change summary: {}\n"
+            "Run Hephaestus with --dump-ir for new runs or migrate old raw "
+            "dumps with: python -m src.tools.changes_from_ir_dumps <run_dir>"
+            .format(changes_file))
+    changes = read_json_retry(changes_file)
+    if not isinstance(changes, dict):
+        raise SystemExit(
+            "Invalid IR change summary, expected JSON object: {}".format(
+                changes_file))
+    return changes_file, changes
+
+
+def csv_phase_value(changes_file, changes, column):
+    if column not in changes:
+        raise SystemExit(
+            "Missing phase column {} in {}".format(column, changes_file))
+    value = changes[column]
+    if value is None:
+        return "None"
+    if value in (0, 1):
+        return str(value)
+    if value in ("0", "1", "None"):
+        return value
+    raise SystemExit(
+        "Invalid value for {} in {}: {!r}".format(
+            column, changes_file, value))
 
 
 def iter_rows(run_dir, faults):
@@ -76,15 +95,16 @@ def iter_rows(run_dir, faults):
             continue
 
         fault = faults.get(str(pid), {})
-        ir_dir = os.path.join(run_dir, str(pid), "ir")
+        program_dir = os.path.join(run_dir, str(pid))
+        changes_file, changes = read_ir_changes(program_dir)
         row = {
             "program_id": pid,
             "program_kind": kind,
             "error_phase": fault.get("error_phase", ""),
         }
         for phase_no, phase_name in PHASES:
-            row[phase_column(phase_no, phase_name)] = phase_changed(
-                ir_dir, phase_no, phase_name)
+            column = phase_column(phase_no, phase_name)
+            row[column] = csv_phase_value(changes_file, changes, column)
         yield row
 
 

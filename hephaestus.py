@@ -24,6 +24,7 @@ from src.translators.groovy import GroovyTranslator
 from src.translators.scala import ScalaTranslator
 from src.translators.java import JavaTranslator
 from src.modules.processor import ProgramProcessor
+from src.tools.changes_from_ir_dumps import write_program_ir_changes
 
 
 STOP_COND = False
@@ -182,13 +183,14 @@ def preserve_final_program_dir(pid):
         shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
 
-def preserve_ir_dump_to_tmp(dirname, pid):
+def preserve_ir_changes_to_tmp(dirname, pid):
     if not cli_args.dump_ir:
         return
-    src_ir = os.path.join(dirname, 'src', 'ir', 'src')
-    dst_ir = os.path.join(cli_args.test_directory, 'tmp', str(pid), 'ir')
-    if os.path.isdir(src_ir):
-        shutil.copytree(src_ir, dst_ir, dirs_exist_ok=True)
+    dump_root = os.path.join(dirname, 'src', 'ir')
+    dst_dir = os.path.join(cli_args.test_directory, 'tmp', str(pid))
+    write_program_ir_changes(dst_dir, dump_root)
+    if os.path.isdir(dump_root):
+        shutil.rmtree(dump_root)
 
 
 def save_stats():
@@ -482,7 +484,7 @@ def check_oracle(dirname, oracles):
             print('We found compiler crash')
         for pid, proc_res in oracles.items():
             if not proc_res.failed:
-                preserve_ir_dump_to_tmp(dirname, pid)
+                preserve_ir_changes_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
                 proc_res.stats['error'] = compiler.crash_msg
                 attach_time_metrics(pid, proc_res.stats, time_metrics)
@@ -517,7 +519,7 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
-                preserve_ir_dump_to_tmp(dirname, pid)
+                preserve_ir_changes_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
                 if stop:
                     print(proc_res.stats['error'])
@@ -536,10 +538,10 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
-                preserve_ir_dump_to_tmp(dirname, pid)
+                preserve_ir_changes_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
         if cli_args.keep_everything:
-            preserve_ir_dump_to_tmp(dirname, pid)
+            preserve_ir_changes_to_tmp(dirname, pid)
             preserve_final_program_dir(pid)
         shutil.rmtree(os.path.join(cli_args.test_directory, 'tmp',
                                    str(pid)))

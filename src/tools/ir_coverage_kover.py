@@ -9,6 +9,7 @@ from src.tools.ir_csv import DEFAULT_OUTPUT
 from src.tools.ir_coverage import (
     BACKENDS,
     default_output_dir,
+    ensure_default_phase_csv,
     expand_arg,
     extract_report_classes,
     hephaestus_compile_cmd,
@@ -246,6 +247,7 @@ def main():
     columns = lowering_columns(args.lowerings)
     csv_file = Path(args.csv_file).resolve() if args.csv_file else (
         run_dir / DEFAULT_OUTPUT)
+    ensure_default_phase_csv(run_dir, csv_file, bool(args.csv_file))
     output_dir = Path(args.output_dir).resolve() if args.output_dir else (
         kover_default_output_dir(run_dir, columns))
     agent_jar = find_single_jar(
