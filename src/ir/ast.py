@@ -1,5 +1,6 @@
 # pylint: disable=dangerous-default-value
-from typing import List, Set, Union
+from dataclasses import dataclass
+from typing import List, Set, Union, Callable
 from copy import deepcopy
 
 import src.ir.type_utils as tu
@@ -328,14 +329,66 @@ class InliningScope(Enum):
     NOINLINE = auto()
     CROSSINLINE = auto()
 
+@dataclass(frozen=True)
+class Visibility:
+    """
+    Describes the visibility of the declaration like
+    `org.jetbrains.kotlin.descriptors.Visibility <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibility.kt>`_.
+
+    In Kotlin, explicit declarations desent from `[org.jetbrains.kotlin.fir.lightTree.fir.modifier.ModifierFlag]` (AST),
+    but implict ones (:attr:`Visibilities.UNKNOWN`) are resolved in context during frontend phase FirStatusResolver. Here,
+    this frontend stage is replaced with :meth:`Visibility.resolve()`.
+    """
+    name: str
+    is_public_api: bool
+    _resolve: "Callable[[Visibility, VisibilityResolutionContext | None], Visibility] | None" = None
+
+    def resolve(
+            self,
+            context: "VisibilityResolutionContext | None" = None,
+    ) -> "Visibility":
+        if self._resolve is None:
+            return self
+        return self._resolve(self, context)
+
+# TODO: Support inheritance if support of INTERNAL, PROTECTED is added
+@dataclass(frozen=True)
+class VisibilityResolutionContext:
+    is_local: bool = False
+    containing_property_visibility: Visibility | None = None
+    overridden_visibilities: tuple[Visibility, ...] = ()
+    default_visibility: Visibility | None = None
+
+
 # TODO: Handle INTERNAL, PROTECTED, etc
-# DEFAULT means that AST node doesn't have visibility modifier, real visibility should
-class Visibility(Enum):
-    DEFAULT = auto()
-    PUBLIC = auto()
-    PROTECTED = auto()
-    INTERNAL = auto()
-    PRIVATE = auto()
+class Visibilities:
+    """
+    Namespace with possible AST declarations of visibility `org.jetbrains.kotlin.descriptors.Visibilities <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibilities.kt>`_.
+
+    Supported:  :attr:`Visibilities.PRIVATE`, :attr:`Visibilities.PUBLIC`, :attr:`Visibilities.UNKNOWN`
+
+    Supported (adhoc): :attr:`Visibilities.PrivateToThis`, :attr:`Visibilities.Local` (by lexical scope)
+
+    Used in Kotlin: :attr:`Visibilities.Private`, :attr:`Visibilities.Public`, :attr:`Visibilities.Protected`, :attr:`Visibilities.Internal`, :attr:`Visibilities.Unknown`, :attr:`Visibilities.Local`
+
+    Supported in Kotlin (adhoc): :attr:`Visibilities.PrivateToThis`
+
+    Used in Kotlin only for diagnostics: :attr:`Visibilities.InvisibleFake`
+
+    Used in Kotlin (K1) Legacy: :attr:`Visibilities.Inherited`, :attr:`Visibilities.PrivateToThis`
+    """
+    PRIVATE = Visibility("private", False)
+    INTERNAL = Visibility("internal", False)
+    PROTECTED = Visibility("protected", True)
+    PUBLIC = Visibility("public", True)
+
+    # TODO: Support inheritance if support of INTERNAL, PROTECTED is added
+    UNKNOWN = Visibility("unknown",
+                         False,
+                         _resolve=lambda _self, _: (
+                            Visibilities.PUBLIC
+                         ))
+
 
 class ParameterDeclaration(Declaration):
     def __init__(self, name: str,
