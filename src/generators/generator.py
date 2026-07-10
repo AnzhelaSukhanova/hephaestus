@@ -268,8 +268,22 @@ class Generator():
         class_method = self.namespace[-2][0].isupper()
         class_method = (False if len(self.namespace) < 2 else
                         self.namespace[-2][0].isupper())
-        can_override = abstract or is_interface or (class_method and not
-                                    class_is_final and ut.random.bool())
+
+        visibility = ut.random.r.choices(
+            population=[
+                ast.Visibilities.PUBLIC,
+                ast.Visibilities.PRIVATE,
+                ast.Visibilities.UNKNOWN,
+            ],
+            weights=[
+                cfg.prob.function_visibility.public,
+                cfg.prob.function_visibility.private if not (abstract or is_interface) else 0,
+                cfg.prob.function_visibility.not_specified,
+            ]
+        )[0]
+
+        can_override = visibility != ast.Visibilities.PRIVATE and (abstract or is_interface or (class_method and not
+                                    class_is_final and ut.random.bool()))
         # Check if this function we want to generate is a nested functions.
         # To do so, we want to find if the function is directly inside the
         # namespace of another function.
@@ -350,9 +364,7 @@ class Generator():
             inferred_type=None,
             type_parameters=type_params,
             inherits_param_with_default=inherits_param_with_default,
-            visibility=(ast.Visibility.DEFAULT
-                        if not class_method
-                        else ast.Visibility.PRIVATE),
+            visibility=visibility,
         )
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:
@@ -737,6 +749,7 @@ class Generator():
         type_param_names = [t.name for t in type_params]
         ret_type = func.ret_type
         inherits_param_with_default = func.inherits_param_with_default
+        assert func.visibility.resolve() != ast.Visibilities.PRIVATE
         for p in params:
             if p.default is not None:
                 inherits_param_with_default = True
@@ -771,6 +784,7 @@ class Generator():
                                       type_params=type_params)
         if func.body is None:
             new_func.is_final = False
+        # This is set only after generation, make sure modalities are good
         new_func.override = True
         return new_func
 
@@ -894,9 +908,14 @@ class Generator():
 
     def _get_class_attributes(self, class_decl, attr_name):
         class_decls = self.context.get_classes(self.namespace).values()
+        attributes = []
         if attr_name == 'functions':
-            return class_decl.get_callable_functions(class_decls)
-        return class_decl.get_all_fields(class_decls)
+            attributes = class_decl.get_callable_functions(class_decls)
+        else:
+            attributes = class_decl.get_all_fields(class_decls)
+        return [attr
+                for attr in attributes
+                if getattr(attr, 'visibility').resolve() != ast.Visibilities.PRIVATE]
 
     # This function respects call sites, and when generate_expr tries to redo generation on failure, it doesn't add new ExprCallSites
     def generate_expr(self,

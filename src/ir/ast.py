@@ -454,7 +454,7 @@ class FunctionDeclaration(Declaration):
                  override=False,
                  type_parameters=[],
                  inherits_param_with_default=False,
-                 visibility=Visibility.DEFAULT):
+                 visibility=Visibilities.UNKNOWN):
         self.name = name
         self.params = params
         self.ret_type = ret_type

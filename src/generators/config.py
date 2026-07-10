@@ -49,6 +49,14 @@ class GenLimits:
     min_top_level: int # min number of top-level declarations
     max_depth: int # max depth of leaves in programs
 
+@dataclass
+class VisibilityProbabilities:
+    public: float
+    private: float
+    not_specified: float
+
+    def __post_init__(self):
+        assert self.public + self.private + self.not_specified == 1.0
 
 # In many scenarios like func_ref_call, there may be a slighter change that
 # we will generate the specified expression based on the current program
@@ -61,7 +69,8 @@ class Probabilities:
     func_ref_call: float # use function reference call instead of function call
     func_ref: float # generate func_ref instead of lambda
     sam_coercion: float # perform sam coercion whenever possible
-
+    function_visibility: VisibilityProbabilities
+    property_visibility: VisibilityProbabilities
 
 # Features that we want to either disable or enable
 # If something is set to True then it means it is disabled.
@@ -97,6 +106,16 @@ class GenConfig(metaclass=Singleton):
                 func_ref_call=1.0,
                 func_ref=0.5,
                 sam_coercion=1.0,
+                function_visibility=VisibilityProbabilities(
+                    public=0.2,
+                    private=0.5,
+                    not_specified=0.3
+                ),
+                property_visibility=VisibilityProbabilities(
+                    public=0.2,
+                    private=0.5,
+                    not_specified=0.3
+                )
         )
         self.dis=Disabled(
             use_site_variance=False,
