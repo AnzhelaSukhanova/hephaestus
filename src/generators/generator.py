@@ -22,6 +22,7 @@ TODOs:
 import functools
 from abc import ABC
 from collections import defaultdict
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Tuple, List, Callable
@@ -55,6 +56,10 @@ class FunctionBodyGeneration(CallContext):
 @dataclass(frozen=True)
 class ExprCallSite(CallContext):
     pass
+
+@dataclass(frozen=True)
+class PublicApiInlineBody(CallContext):
+    callee: ast.FunctionDeclaration
 
 class Generator():
     # TODO document
@@ -982,6 +987,12 @@ class Generator():
                 for attr in attributes
                 if getattr(attr, 'visibility').resolve() != ast.Visibilities.PRIVATE]
 
+    def _call_site_visibility_allowed_by_public_api_inline_checkers(self, decl):
+        if self.context.has_call_context(PublicApiInlineBody):
+            if not getattr(decl, 'visibility', ast.Visibilities.PUBLIC).resolve().is_public_api:
+                return False
+        return True
+
     # This function respects call sites, and when generate_expr tries to redo generation on failure, it doesn't add new ExprCallSites
     def generate_expr(self,
                       expr_type: tp.Type=None,
@@ -1149,9 +1160,20 @@ class Generator():
         for var in self.context.get_vars(self.namespace).values():
             if self._inside_java_lambda:
                 continue
-            if not getattr(var, 'is_final', True):
-                variables.append((None, var))
+
+            if not self._call_site_visibility_allowed_by_public_api_inline_checkers(var):
                 continue
+
+            # TODO: Keep before we refactor VariableDeclaration to also disentangle is_immutable from is_final
+            # as a part of making it Kotlin specific
+            if isinstance(var, ast.VariableDeclaration):
+                if not var.is_final:
+                    variables.append((None, var))
+                    continue
+            elif isinstance(var, ast.FieldDeclaration):
+                if not var.is_immutable:
+                    variables.append((None, var))
+                    continue
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
                 continue
@@ -1271,6 +1293,10 @@ class Generator():
                 lambda v: (getattr(v, 'is_final', False) or v not in
                     self.context.get_vars(self.namespace[:-1]).values()),
                 variables))
+        variables = [
+            v for v in variables
+            if self._call_site_visibility_allowed_by_public_api_inline_checkers(v)
+        ]
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
         if subtype:
@@ -1829,6 +1855,17 @@ class Generator():
             etype: the type that the function call should return.
             only_leaves: do not generate new leaves except from `expr`.
             subtype: The returned type could be a subtype of `etype`.
+        Example:
+              Generate Kotlin code::
+
+                  class C(private val p: () -> Int = { 1 }) {
+                      public inline fun bad(): Int {
+                          return p()
+                      }
+                  }
+
+
+
         """
         # Tuple of signature, name, receiver
         refs = []
@@ -1842,6 +1879,8 @@ class Generator():
         for var in variables:
             var_type = var.get_type()
             if not getattr(var_type, 'is_function_type', lambda: False)():
+                continue
+            if not self._call_site_visibility_allowed_by_public_api_inline_checkers(var):
                 continue
             ret_type = var_type.type_args[-1]
             if (subtype and ret_type.is_assignable(etype)) or ret_type == etype:
@@ -2444,6 +2483,8 @@ class Generator():
         variables += list(self.context.get_vars(
             ('global',), only_current=True).values())
         for var_decl in variables:
+            if not self._call_site_visibility_allowed_by_public_api_inline_checkers(var_decl):
+                continue
             var_type = var_decl.get_type()
             var = ast.Variable(var_decl.name)
             if var_type == etype:
@@ -2518,22 +2559,33 @@ class Generator():
             else ret_type
         )
         self.context.push_call_context(FunctionBodyGeneration(func))
+        pushed_public_inline = False
+        if (
+            func is not None and
+            func.is_inline and
+            func.visibility.resolve().is_public_api
+        ):
+            self.context.push_call_context(PublicApiInlineBody(func))
+            pushed_public_inline = True
+
         try:
             expr = self.generate_expr(expr_type)
+            decls = list(self.context.get_declarations(
+                self.namespace, True).values())
+            var_decls = [d for d in decls
+                         if not isinstance(d, ast.ParameterDeclaration)]
+            if (not var_decls and ret_type != self.bt_factory.get_void_type()):
+                # The function does not contain any declarations and its return
+                # type is not Unit. So, we can create an expression-based function.
+                body = expr if ut.random.bool(cfg.prob.function_expr) else \
+                    ast.Block([expr])
+            else:
+                exprs, decls = self._gen_side_effects(func)
+                body = ast.Block(decls + exprs + [expr])
         finally:
             self.context.pop_call_context()
-        decls = list(self.context.get_declarations(
-            self.namespace, True).values())
-        var_decls = [d for d in decls
-                     if not isinstance(d, ast.ParameterDeclaration)]
-        if (not var_decls and ret_type != self.bt_factory.get_void_type()):
-            # The function does not contain any declarations and its return
-            # type is not Unit. So, we can create an expression-based function.
-            body = expr if ut.random.bool(cfg.prob.function_expr) else \
-                ast.Block([expr])
-        else:
-            exprs, decls = self._gen_side_effects(func)
-            body = ast.Block(decls + exprs + [expr])
+            if pushed_public_inline:
+                self.context.pop_call_context()
         return body
 
     # Where
@@ -2617,6 +2669,8 @@ class Generator():
                     v not in self.context.get_vars(self.namespace[:-1]).values())),
                 variables))
         for var in variables:
+            if not self._call_site_visibility_allowed_by_public_api_inline_checkers(var):
+                continue
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
                 continue
@@ -2757,6 +2811,9 @@ class Generator():
                 # of functions have bounds corresponding to the type parameters
                 # of class.
                 continue
+            # Public API inline functions can't access non-public API methods
+            if not self._call_site_visibility_allowed_by_public_api_inline_checkers(func):
+                continue
 
             type_var_map = {}
             if func.is_parameterized():
@@ -2781,6 +2838,9 @@ class Generator():
                                                       'functions',
                                                       signature=signature)
 
+    ### Make local/global helper functions/classes ###
+
+    @contextmanager
     def _isolated_generation(self, starting_namespace = ast.GLOBAL_NAMESPACE):
         initial_inside_inline = self._inside_inline_function
         initial_namespace = self.namespace
@@ -2820,6 +2880,8 @@ class Generator():
                     gen_method = True
                     break
         # Kotlin doesn't allow local functions inside inline function bodies
+        # TODO: But we can generate them globally, assuming no type_variables.
+        # TODO: And with type params, we can generate global func and pass type
         if self._inside_inline_function and self.language == 'kotlin':
             gen_method = True
         if not gen_method:

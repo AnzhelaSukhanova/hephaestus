@@ -1,4 +1,4 @@
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
 
 from src import utils
@@ -12,6 +12,8 @@ class Context():
         # A lookup from declarations to namespaces
         self._namespaces = {}
         self._call_stack = []
+        # Optimization on top of self._call_stack to get O(1) access to last call of each type
+        self._typed_call_stacks = defaultdict(list)
 
     def push_call_context(self, callcontext):
         self._call_stack.append(callcontext)
@@ -20,12 +22,13 @@ class Context():
     def pop_call_context(self):
         if not self._call_stack:
             return None
-        return self._call_stack.pop()
+        last_call_context = self._call_stack.pop()
+        assert self._typed_call_stacks[type(last_call_context)].pop() is last_call_context
+        return last_call_context
 
-    def current_call_context(self):
-        if not self._call_stack:
-            return None
-        return self._call_stack[-1]
+    def has_call_context(self, frame_type):
+        return bool(self._typed_call_stacks.get(frame_type, []))
+
     def current_call_context(self, frame_type=None):
         if frame_type is None:
             if not self._call_stack:
