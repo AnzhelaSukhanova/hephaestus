@@ -56,7 +56,7 @@ class VisibilityProbabilities:
     not_specified: float
 
     def __post_init__(self):
-        assert self.public + self.private + self.not_specified == 1.0
+        assert abs(self.public + self.private + self.not_specified - 1.0) <= 1e-9
 
 @dataclass
 class ModalityProbabilities:
@@ -70,7 +70,7 @@ class ClassTypeProbabilities:
     interface: float
 
     def __post_init__(self):
-        assert self.regular + self.abstract + self.interface == 1.0
+        assert abs(self.regular + self.abstract + self.interface - 1.0) <= 1e-9
 
 @dataclass
 class HelperFunctionProbabilities:
@@ -79,7 +79,7 @@ class HelperFunctionProbabilities:
     is_local_function: float
 
     def __post_init__(self):
-        assert self.is_global_method + self.is_global_function + self.is_local_function == 1.0
+        assert abs(self.is_global_method + self.is_global_function + self.is_local_function - 1.0) <= 1e-9
 
 @dataclass
 class TopLevelDeclarationProbabilities:
@@ -88,7 +88,7 @@ class TopLevelDeclarationProbabilities:
     variable_declaration: float
 
     def __post_init__(self):
-        assert self.function_declaration + self.class_declaration + self.variable_declaration == 1.0
+        assert abs(self.function_declaration + self.class_declaration + self.variable_declaration - 1.0) <= 1e-9
 
 # In many scenarios like func_ref_call, there may be a slighter change that
 # we will generate the specified expression based on the current program
