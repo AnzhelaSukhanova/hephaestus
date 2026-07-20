@@ -124,52 +124,52 @@ class GenConfig(metaclass=Singleton):
     def __init__(self):
         self.limits = GenLimits(
             cls=ClassLimits(
-                max_fields=2,
-                max_funcs=2
+                max_fields=3,
+                max_funcs=4
             ),
             fn=FunctionLimits(
-                max_side_effects=1,
-                max_params=2
+                max_side_effects=2,
+                max_params=3
             ),
-            max_var_decls=3,
-            max_type_params=3,
+            max_var_decls=4,
+            max_type_params=2,
             max_functional_params=3,
-            max_top_level=10,
-            min_top_level=5,
-            max_depth=6
+            max_top_level=14,
+            min_top_level=8,
+            max_depth=7
         )
         self.prob=Probabilities(
-                function_expr=1.0,
-                bounded_type_parameters=0.5,
-                parameterized_functions=0.3,
+                function_expr=0.65,
+                bounded_type_parameters=0.2,
+                parameterized_functions=0.2,
                 reified_type_parameters=0.7,
-                func_ref_call=1.0,
-                func_ref=0.5,
-                sam_coercion=1.0,
+                func_ref_call=0.75,
+                func_ref=0.6,
+                sam_coercion=0.85,
                 function_visibility=VisibilityProbabilities(
-                    public=0.2,
-                    private=0.5,
-                    not_specified=0.3
+                    public=0.3,
+                    private=0.35,
+                    not_specified=0.35
                 ),
                 property_visibility=VisibilityProbabilities(
                     public=0.2,
-                    private=0.5,
-                    not_specified=0.3
+                    private=0.45,
+                    not_specified=0.35
                 ),
             class_methods_modality=ModalityProbabilities(
-                override_final=0.5,
-                declaration_final=0.5
+                override_final=0.25,
+                declaration_final=0.65
             ),
             class_fields_modality=ModalityProbabilities(
-                override_final=0.5,
-                declaration_final=0.5
+                override_final=0.35,
+                declaration_final=0.6
             ),
             class_declaration_modality=ModalityProbabilities(
                 override_final=0.5, # currently, due to way how hephaestus generates superclasses, we use `declaration_final` for overrides too
                 declaration_final=0.65
             ),
-            class_field_is_immutable=0.5,
-            override_also_adding_setter=0.5,
+            class_field_is_immutable=0.65,
+            override_also_adding_setter=0.35,
             class_type=ClassTypeProbabilities(
                 regular=0.7,
                 abstract=0.15,
