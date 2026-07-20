@@ -150,6 +150,70 @@ class Block(Node):
             return check_list_eq(self.body, other.body)
         return False
 
+@dataclass(frozen=True)
+class Visibility:
+    """
+    Describes the visibility of the declaration like
+    `org.jetbrains.kotlin.descriptors.Visibility <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibility.kt>`_.
+
+    In Kotlin, explicit declarations desent from `[org.jetbrains.kotlin.fir.lightTree.fir.modifier.ModifierFlag]` (AST),
+    but implict ones (:attr:`Visibilities.UNKNOWN`) are resolved in context during frontend phase FirStatusResolver. Here,
+    this frontend stage is replaced with :meth:`Visibility.resolve()`.
+    """
+    name: str
+    is_public_api: bool
+    _resolve: "Callable[[Visibility, VisibilityResolutionContext | None], Visibility] | None" = None
+
+    def resolve(
+            self,
+            context: "VisibilityResolutionContext | None" = None,
+    ) -> "Visibility":
+        if self._resolve is None:
+            return self
+        return self._resolve(self, context)
+
+# TODO: Support inheritance if support of INTERNAL, PROTECTED is added
+@dataclass(frozen=True)
+class VisibilityResolutionContext:
+    is_local: bool = False
+    containing_property_visibility: Visibility | None = None
+    overridden_visibilities: tuple[Visibility, ...] = ()
+    default_visibility: Visibility | None = None
+
+# Visibility resolution lowerings, stored here for pickling
+def resolve_unknown_visibility(
+        _self: Visibility,
+        _context: VisibilityResolutionContext | None = None,
+) -> Visibility:
+    return Visibilities.PUBLIC
+
+
+# TODO: Handle INTERNAL, PROTECTED, etc
+class Visibilities:
+    """
+    Namespace with possible AST declarations of visibility `org.jetbrains.kotlin.descriptors.Visibilities <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibilities.kt>`_.
+
+    Supported:  :attr:`Visibilities.PRIVATE`, :attr:`Visibilities.PUBLIC`, :attr:`Visibilities.UNKNOWN`
+
+    Supported (adhoc): :attr:`Visibilities.PrivateToThis`, :attr:`Visibilities.Local` (by lexical scope)
+
+    Used in Kotlin: :attr:`Visibilities.Private`, :attr:`Visibilities.Public`, :attr:`Visibilities.Protected`, :attr:`Visibilities.Internal`, :attr:`Visibilities.Unknown`, :attr:`Visibilities.Local`
+
+    Supported in Kotlin (adhoc): :attr:`Visibilities.PrivateToThis`
+
+    Used in Kotlin only for diagnostics: :attr:`Visibilities.InvisibleFake`
+
+    Used in Kotlin (K1) Legacy: :attr:`Visibilities.Inherited`, :attr:`Visibilities.PrivateToThis`
+    """
+    PRIVATE = Visibility("private", False)
+    INTERNAL = Visibility("internal", False)
+    PROTECTED = Visibility("protected", True)
+    PUBLIC = Visibility("public", True)
+
+    # TODO: Support inheritance if support of INTERNAL, PROTECTED is added
+    UNKNOWN = Visibility("unknown",
+                         False,
+                         _resolve=resolve_unknown_visibility)
 
 class Declaration(Node):
     def get_type(self):

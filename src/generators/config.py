@@ -58,6 +58,11 @@ class VisibilityProbabilities:
     def __post_init__(self):
         assert self.public + self.private + self.not_specified == 1.0
 
+@dataclass
+class ModalityProbabilities:
+    override_final: float
+    declaration_final: float
+
 # In many scenarios like func_ref_call, there may be a slighter change that
 # we will generate the specified expression based on the current program
 @dataclass
@@ -71,6 +76,10 @@ class Probabilities:
     sam_coercion: float # perform sam coercion whenever possible
     function_visibility: VisibilityProbabilities
     property_visibility: VisibilityProbabilities
+    class_methods_modality: ModalityProbabilities
+    class_fields_modality: ModalityProbabilities
+    class_field_is_immutable: float # val / var (kotlin)
+    override_also_adding_setter: float # override val (getter only), adding additional setter var
 
 # Features that we want to either disable or enable
 # If something is set to True then it means it is disabled.
@@ -115,7 +124,17 @@ class GenConfig(metaclass=Singleton):
                     public=0.2,
                     private=0.5,
                     not_specified=0.3
-                )
+                ),
+            class_methods_modality=ModalityProbabilities(
+                override_final=0.5,
+                declaration_final=0.5
+            ),
+            class_fields_modality=ModalityProbabilities(
+                override_final=0.5,
+                declaration_final=0.5
+            ),
+            class_field_is_immutable=0.5,
+            override_also_adding_setter=0.5
         )
         self.dis=Disabled(
             use_site_variance=False,
