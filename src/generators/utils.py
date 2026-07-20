@@ -78,21 +78,22 @@ def select_class_type(contain_fields: bool):
     """
     # TODO probabilities table
     # there's higher probability to generate a regular class.
-    class_type = ut.random.r.choices(
+    if ut.random.bool(cfg.prob.class_type.regular):
+        return ast.ClassDeclaration.REGULAR
+
+    if contain_fields:
+        return ast.ClassDeclaration.ABSTRACT
+
+    return ut.random.r.choices(
         population=[
-            ast.ClassDeclaration.REGULAR,
             ast.ClassDeclaration.ABSTRACT,
             ast.ClassDeclaration.INTERFACE,
         ],
         weights=[
-            cfg.prob.class_type.regular,
             cfg.prob.class_type.abstract,
-            cfg.prob.class_type.interface if not contain_fields else 0,
+            cfg.prob.class_type.interface,
         ]
     )[0]
-    if contain_fields:
-        assert cfg.prob.class_type.regular + cfg.prob.class_type.abstract > 0
-    return class_type
 
 
 def init_variance_choices(type_var_map: tu.TypeVarMap) -> tu.VarianceChoices:

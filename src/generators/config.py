@@ -166,24 +166,24 @@ class GenConfig(metaclass=Singleton):
             ),
             class_declaration_modality=ModalityProbabilities(
                 override_final=0.5, # currently, due to way how hephaestus generates superclasses, we use `declaration_final` for overrides too
-                declaration_final=0.65
+                declaration_final=0.5
             ),
             class_field_is_immutable=0.5,
             override_also_adding_setter=0.5,
             class_type=ClassTypeProbabilities(
-                regular=0.7,
-                abstract=0.15,
-                interface=0.15
+                regular=0.5,
+                abstract=0.25,
+                interface=0.25
             ),
             helper_functions=HelperFunctionProbabilities(
-                is_global_method=0.7,
-                is_global_function=0.15,
-                is_local_function=0.15
+                is_global_method=0.5,
+                is_global_function=0.25,
+                is_local_function=0.25
             ),
             top_level_declarations=TopLevelDeclarationProbabilities(
-                function_declaration=0.4,
-                class_declaration=0.45,
-                variable_declaration=0.15
+                function_declaration=1/3,
+                class_declaration=1/3,
+                variable_declaration=1/3
             )
         )
         self.dis=Disabled(
