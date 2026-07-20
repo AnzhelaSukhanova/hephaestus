@@ -4,6 +4,7 @@ This file includes utility functions for the generator module.
 from dataclasses import dataclass
 
 from src import utils as ut
+from src.generators.config import cfg
 from src.ir import ast
 from src.ir import types as tp
 from src.ir import type_utils as tu
@@ -77,13 +78,21 @@ def select_class_type(contain_fields: bool):
     """
     # TODO probabilities table
     # there's higher probability to generate a regular class.
-    if ut.random.bool():
-        return ast.ClassDeclaration.REGULAR
-
-    candidates = [ast.ClassDeclaration.ABSTRACT]
-    if not contain_fields:
-        candidates.append(ast.ClassDeclaration.INTERFACE)
-    return ut.random.choice(candidates)
+    class_type = ut.random.r.choices(
+        population=[
+            ast.ClassDeclaration.REGULAR,
+            ast.ClassDeclaration.ABSTRACT,
+            ast.ClassDeclaration.INTERFACE,
+        ],
+        weights=[
+            cfg.prob.class_type.regular,
+            cfg.prob.class_type.abstract,
+            cfg.prob.class_type.interface if not contain_fields else 0,
+        ]
+    )[0]
+    if contain_fields:
+        assert cfg.prob.class_type.regular + cfg.prob.class_type.abstract > 0
+    return class_type
 
 
 def init_variance_choices(type_var_map: tu.TypeVarMap) -> tu.VarianceChoices:

@@ -141,12 +141,19 @@ class Generator():
         NOTE that a top-level declaration can generate more top-level
         declarations.
         """
-        candidates = [
-            self.gen_variable_decl,
-            self.gen_class_decl,
-            self.gen_func_decl,
-        ]
-        gen_func = ut.random.choice(candidates)
+
+        gen_func = ut.random.r.choices(
+            population=[
+                self.gen_variable_decl,
+                self.gen_class_decl,
+                self.gen_func_decl
+            ],
+            weights=[
+                cfg.prob.top_level_declarations.variable_declaration,
+                cfg.prob.top_level_declarations.class_declaration,
+                cfg.prob.top_level_declarations.function_declaration,
+            ]
+        )[0]
         gen_func()
 
     def generate_main_func(self) -> ast.FunctionDeclaration:
@@ -487,7 +494,7 @@ class Generator():
         initial_depth = self.depth
         self.depth += 1
         class_type = gu.select_class_type(field_type is not None)
-        is_final = ut.random.bool() and class_type == \
+        is_final = ut.random.bool(cfg.prob.class_declaration_modality.declaration_final) and class_type == \
             ast.ClassDeclaration.REGULAR
         type_params = type_params or self.gen_type_params(
             with_variance=self.language in ['kotlin', 'scala'])
@@ -2868,7 +2875,7 @@ class Generator():
         """
         # Randomly choose to generate a function or a class method.
         gen_method = (
-            ut.random.bool() or
+            ut.random.bool(cfg.prob.helper_functions.is_global_method) or
             # We avoid generating nested functions that we are going to use
             # as function references.
             signature
@@ -2888,11 +2895,16 @@ class Generator():
             # If the given type 'etype' is a type parameter, then the
             # function we want to generate should be in the current namespace,
             # so that the type parameter is accessible.
-            self.namespace = (
-                self.namespace
-                if ut.random.bool() or etype.has_type_variables()
-                else ast.GLOBAL_NAMESPACE
-            )
+            self.namespace = ut.random.r.choices(
+                population=[
+                    self.namespace, # local function
+                    ast.GLOBAL_NAMESPACE,
+                ],
+                weights=[
+                    cfg.prob.helper_functions.is_local_function,
+                    cfg.prob.helper_functions.is_global_function if not etype.has_type_variables() else 0,
+                ]
+            )[0]
             # Generate a function
             params = None
             if signature:
