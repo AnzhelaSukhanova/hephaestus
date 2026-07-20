@@ -3,7 +3,7 @@ This file contains the classes that are responsible for configuring the
 generation policies.
 """
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 
 
 class Singleton(type):
@@ -17,13 +17,35 @@ class Singleton(type):
 def process_arg(config, name, value):
     assert hasattr(config, name), \
         f"{type(config).__name__} has not {name} argument"
-    if isinstance(getattr(config, name), (int, float)):
-        assert isinstance(value, (int, float)), \
-            f"{name}={value} is not int or float"
+    old_value = getattr(config, name)
+    if isinstance(old_value, bool):
+        assert isinstance(value, bool), f"{name}={value} is not bool"
         setattr(config, name, value)
+    elif isinstance(old_value, int):
+        assert isinstance(value, int) and not isinstance(value, bool), \
+            f"{name}={value} is not int"
+        setattr(config, name, value)
+    elif isinstance(old_value, float):
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), \
+            f"{name}={value} is not int or float"
+        setattr(config, name, float(value))
     else:
+        assert isinstance(value, dict), \
+            f"{name}={value} is not a nested config object"
         for key, val in value.items():
-            process_arg(getattr(config, name), key, val)
+            process_arg(old_value, key, val)
+
+
+def validate_config(config):
+    if is_dataclass(config):
+        for field in fields(config):
+            validate_config(getattr(config, field.name))
+        post_init = getattr(config, "__post_init__", None)
+        if post_init:
+            post_init()
+    elif hasattr(config, "__dict__"):
+        for value in vars(config).values():
+            validate_config(value)
 
 
 @dataclass
@@ -192,8 +214,10 @@ class GenConfig(metaclass=Singleton):
         )
 
     def json_config(self, kwargs):
+        assert isinstance(kwargs, dict)
         for key, value in kwargs.items():
             process_arg(self, key, value)
+        validate_config(self)
 
     def to_json(self):
         return json.dumps(self, default=lambda o: o.__dict__)

@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 from src.utils import random, mkdir
@@ -126,14 +127,19 @@ parser.add_argument(
 parser.add_argument(
     "--max-type-params",
     type=int,
-    default=3,
+    default=None,
     help="Maximum number of type parameters to generate"
 )
 parser.add_argument(
     "--max-depth",
     type=int,
-    default=6,
+    default=None,
     help="Generate programs up to the given depth"
+)
+parser.add_argument(
+    "--generator-config",
+    type=str,
+    help="Path to a JSON file overriding generator configuration values"
 )
 parser.add_argument(
     "-P",
@@ -233,9 +239,21 @@ random.remove_reserved_words(args.language)
 
 # Set configurations
 
-cfg.dis.use_site_variance = args.disable_use_site_variance
-cfg.dis.use_site_contravariance = args.disable_contravariance_use_site
-cfg.limits.max_depth = args.max_depth
+if args.generator_config:
+    try:
+        with open(args.generator_config) as config_file:
+            cfg.json_config(json.load(config_file))
+    except (AssertionError, json.JSONDecodeError, OSError) as exc:
+        sys.exit(f"Error loading --generator-config {args.generator_config}: {exc}")
+
+if args.disable_use_site_variance:
+    cfg.dis.use_site_variance = True
+if args.disable_contravariance_use_site:
+    cfg.dis.use_site_contravariance = True
+if args.max_type_params is not None:
+    cfg.limits.max_type_params = args.max_type_params
+if args.max_depth is not None:
+    cfg.limits.max_depth = args.max_depth
 if args.disable_bounded_type_parameters:
     cfg.prob.bounded_type_parameters = 0
 if args.disable_parameterized_functions:

@@ -1,0 +1,70 @@
+{
+  "dis": {
+    "use_site_contravariance": false,
+    "use_site_variance": false
+  },
+  "limits": {
+    "cls": {
+      "max_fields": 2,
+      "max_funcs": 2
+    },
+    "fn": {
+      "max_params": 2,
+      "max_side_effects": 1
+    },
+    "max_depth": 6,
+    "max_functional_params": 3,
+    "max_top_level": 10,
+    "max_type_params": 3,
+    "max_var_decls": 3,
+    "min_top_level": 5
+  },
+  "prob": {
+    "bounded_type_parameters": 0.5,
+    "class_declaration_modality": {
+      "declaration_final": 0.5,
+      "override_final": 0.5
+    },
+    "class_field_is_immutable": 0.5,
+    "class_fields_modality": {
+      "declaration_final": 0.5,
+      "override_final": 0.5
+    },
+    "class_methods_modality": {
+      "declaration_final": 0.5,
+      "override_final": 0.5
+    },
+    "class_type": {
+      "abstract": 0.25,
+      "interface": 0.25,
+      "regular": 0.5
+    },
+    "func_ref": 0.5,
+    "func_ref_call": 1.0,
+    "function_expr": 1.0,
+    "function_visibility": {
+      "not_specified": 0.3,
+      "private": 0.5,
+      "public": 0.2
+    },
+    "helper_functions": {
+      "is_global_function": 0.25,
+      "is_global_method": 0.5,
+      "is_local_function": 0.25
+    },
+    "override_also_adding_setter": 0.5,
+    "parameterized_functions": 0.3,
+    "property_visibility": {
+      "not_specified": 0.3,
+      "private": 0.5,
+      "public": 0.2
+    },
+    "reified_type_parameters": 0.7,
+    "sam_coercion": 1.0,
+    "top_level_declarations": {
+      "class_declaration": 0.3333333333333333,
+      "function_declaration": 0.3333333333333333,
+      "variable_declaration": 0.3333333333333333
+    }
+  }
+}
