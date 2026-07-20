@@ -4,7 +4,7 @@ from src.ir.context import *
 
 
 def produce_program(lang, types):
-    a_a_field = FieldDeclaration("a", types.StringType(), is_final=True)
+    a_a_field = FieldDeclaration("a", types.StringType(), is_immutable=True)
     a_cls = ClassDeclaration(
         "A",
         [],
@@ -16,7 +16,7 @@ def produce_program(lang, types):
     b_a_field = FieldDeclaration(
         "a",
         types.StringType(),
-        is_final=True,
+        is_immutable=True,
         override=True
     )
     b_cls = ClassDeclaration(

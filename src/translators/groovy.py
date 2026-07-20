@@ -406,7 +406,7 @@ class GroovyTranslator(BaseTranslator):
     @append_to
     def visit_field_decl(self, node):
         return "public {final}{field_type} {name}".format(
-            final="final " if node.is_final else "",
+            final="final " if node.is_immutable else "",
             field_type=self.get_type_name(node.field_type),
             name=node.name
         )

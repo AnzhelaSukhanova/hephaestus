@@ -275,13 +275,14 @@ class VariableDeclaration(Declaration):
 
 
 class FieldDeclaration(Declaration):
-    def __init__(self, name: str, field_type: types.Type, is_final=True,
-                 can_override=False, override=False):
+    def __init__(self, name: str, field_type: types.Type, is_immutable=True,
+                 can_override=False, override=False, visibility=Visibilities.UNKNOWN):
         self.name = name
         self.field_type = field_type
-        self.is_final = is_final
+        self.is_immutable = is_immutable
         self.can_override = can_override
         self.override = override
+        self.visibility = visibility
 
     def children(self):
         return []
@@ -303,9 +304,10 @@ class FieldDeclaration(Declaration):
         if isinstance(other, FieldDeclaration):
             return (self.name == other.name and
                     self.field_type == other.field_type and
-                    self.is_final == other.is_final and
+                    self.is_immutable == other.is_immutable and
                     self.can_override == other.can_override and
-                    self.override == other.override)
+                    self.override == other.override and
+                    self.visibility == other.visibility)
         return False
 
 
@@ -393,67 +395,6 @@ class InliningScope(Enum):
     NOINLINE = auto()
     CROSSINLINE = auto()
 
-@dataclass(frozen=True)
-class Visibility:
-    """
-    Describes the visibility of the declaration like
-    `org.jetbrains.kotlin.descriptors.Visibility <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibility.kt>`_.
-
-    In Kotlin, explicit declarations desent from `[org.jetbrains.kotlin.fir.lightTree.fir.modifier.ModifierFlag]` (AST),
-    but implict ones (:attr:`Visibilities.UNKNOWN`) are resolved in context during frontend phase FirStatusResolver. Here,
-    this frontend stage is replaced with :meth:`Visibility.resolve()`.
-    """
-    name: str
-    is_public_api: bool
-    _resolve: "Callable[[Visibility, VisibilityResolutionContext | None], Visibility] | None" = None
-
-    def resolve(
-            self,
-            context: "VisibilityResolutionContext | None" = None,
-    ) -> "Visibility":
-        if self._resolve is None:
-            return self
-        return self._resolve(self, context)
-
-# TODO: Support inheritance if support of INTERNAL, PROTECTED is added
-@dataclass(frozen=True)
-class VisibilityResolutionContext:
-    is_local: bool = False
-    containing_property_visibility: Visibility | None = None
-    overridden_visibilities: tuple[Visibility, ...] = ()
-    default_visibility: Visibility | None = None
-
-
-# TODO: Handle INTERNAL, PROTECTED, etc
-class Visibilities:
-    """
-    Namespace with possible AST declarations of visibility `org.jetbrains.kotlin.descriptors.Visibilities <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibilities.kt>`_.
-
-    Supported:  :attr:`Visibilities.PRIVATE`, :attr:`Visibilities.PUBLIC`, :attr:`Visibilities.UNKNOWN`
-
-    Supported (adhoc): :attr:`Visibilities.PrivateToThis`, :attr:`Visibilities.Local` (by lexical scope)
-
-    Used in Kotlin: :attr:`Visibilities.Private`, :attr:`Visibilities.Public`, :attr:`Visibilities.Protected`, :attr:`Visibilities.Internal`, :attr:`Visibilities.Unknown`, :attr:`Visibilities.Local`
-
-    Supported in Kotlin (adhoc): :attr:`Visibilities.PrivateToThis`
-
-    Used in Kotlin only for diagnostics: :attr:`Visibilities.InvisibleFake`
-
-    Used in Kotlin (K1) Legacy: :attr:`Visibilities.Inherited`, :attr:`Visibilities.PrivateToThis`
-    """
-    PRIVATE = Visibility("private", False)
-    INTERNAL = Visibility("internal", False)
-    PROTECTED = Visibility("protected", True)
-    PUBLIC = Visibility("public", True)
-
-    # TODO: Support inheritance if support of INTERNAL, PROTECTED is added
-    UNKNOWN = Visibility("unknown",
-                         False,
-                         _resolve=lambda _self, _: (
-                            Visibilities.PUBLIC
-                         ))
-
-
 class ParameterDeclaration(Declaration):
     def __init__(self, name: str,
                  param_type: types.Type,
@@ -519,6 +460,21 @@ class FunctionDeclaration(Declaration):
                  type_parameters=[],
                  inherits_param_with_default=False,
                  visibility=Visibilities.UNKNOWN):
+        """
+
+        :param name: Function name
+        :param params: Function name
+        :param ret_type:
+        :param body:
+        :param func_type:
+        :param inferred_type:
+        :param is_final:
+        :param is_inline:
+        :param override:
+        :param type_parameters:
+        :param inherits_param_with_default:
+        :param visibility:
+        """
         self.name = name
         self.params = params
         self.ret_type = ret_type
@@ -600,6 +556,9 @@ class FunctionDeclaration(Declaration):
                     self.func_type == other.func_type and
                     self.is_final == other.is_final and
                     self.is_inline == other.is_inline and
+                    self.override == other.override and
+                    self.inherits_param_with_default == other.inherits_param_with_default and
+                    self.visibility == other.visibility and
                     check_list_eq(self.params, other.params) and
                     check_list_eq(self.type_parameters,
                                   other.type_parameters) and
@@ -761,18 +720,25 @@ class ClassDeclaration(Declaration):
                 return f
         return None
 
+    # Protected must be supported somewhere here
     def get_overridable_functions(self):
+        if self.is_final:
+            return []
         return [
             f
             for f in self.functions
-            if not f.is_final
+            if not (f.is_final or f.visibility.resolve() == Visibilities.PRIVATE)
         ]
 
     def get_overridable_fields(self):
+        if self.is_final:
+            return []
+
         return [
             f
             for f in self.fields
-            if f.can_override and f.is_final
+            # Kotlin specific; mutable ones can also be overwritten
+            if f.can_override and not f.visibility.resolve() == Visibilities.PRIVATE
         ]
 
     def get_callable_functions(self, class_decls) -> Set[FunctionDeclaration]:
@@ -964,6 +930,7 @@ class ClassDeclaration(Declaration):
                     check_list_eq(self.superclasses, other.superclasses) and
                     self.class_type == other.class_type and
                     check_list_eq(self.functions, other.functions) and
+                    check_list_eq(self.fields, other.fields) and
                     self.is_final == other.is_final and
                     check_list_eq(self.type_parameters, other.type_parameters)
                     and self.supertypes == other.supertypes)

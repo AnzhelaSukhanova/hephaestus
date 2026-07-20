@@ -232,7 +232,7 @@ class ScalaTranslator(BaseTranslator):
     def visit_field_decl(self, node):
         prefix = 'final ' if not node.can_override else ''
         prefix += '' if not node.override else 'override '
-        prefix += 'val ' if node.is_final else 'var '
+        prefix += 'val ' if node.is_immutable else 'var '
         res = prefix + node.name + ": " + self.get_type_name(node.field_type)
         self._children_res.append(res)
 

@@ -229,9 +229,11 @@ class Generator():
                       params:List[ast.ParameterDeclaration]=None,
                       abstract=False,
                       is_interface=False,
+                      declared_as_override=False,
                       inherits_param_with_default=False,
                       type_params:List[tp.TypeParameter]=None,
-                      namespace=None) -> ast.FunctionDeclaration:
+                      namespace=None,
+                      visibility:ast.Visibility=None) -> ast.FunctionDeclaration:
         """Generate a function declaration.
 
         This method is responsible for generating all types of function/methods,
@@ -246,9 +248,11 @@ class Generator():
             params: list of parameter declarations.
             abstract: function of an abstract class.
             is_interface: function of an interface.
+            declared_as_override: function overrides an inherited function.
             inherits_param_with_default: function inherits parameter with a default value.
             type_params: list of type parameters for parameterized function.
             namespace: set explicit namespace.
+            visibility: declare explicit visibility.
 
         Returns:
             A function declaration node.
@@ -268,28 +272,51 @@ class Generator():
         class_method = self.namespace[-2][0].isupper()
         class_method = (False if len(self.namespace) < 2 else
                         self.namespace[-2][0].isupper())
-
-        visibility = ut.random.r.choices(
-            population=[
-                ast.Visibilities.PUBLIC,
-                ast.Visibilities.PRIVATE,
-                ast.Visibilities.UNKNOWN,
-            ],
-            weights=[
-                cfg.prob.function_visibility.public,
-                cfg.prob.function_visibility.private if not (abstract or is_interface) else 0,
-                cfg.prob.function_visibility.not_specified,
-            ]
-        )[0]
-
-        can_override = visibility != ast.Visibilities.PRIVATE and (abstract or is_interface or (class_method and not
-                                    class_is_final and ut.random.bool()))
         # Check if this function we want to generate is a nested functions.
         # To do so, we want to find if the function is directly inside the
         # namespace of another function.
+        # This is adhoc Visibilities.Local from Kotlin
         nested_function = (len(self.namespace) > 1 and
                            self.namespace[-2] != 'global' and
                            self.namespace[-2][0].islower())
+
+        if visibility is None:
+            if nested_function:
+                # To protect from someone setting, 0 probability of unknowns, as local func can't be private/public
+                visibility = ast.Visibilities.UNKNOWN
+            else:
+                visibility = ut.random.r.choices(
+                    population=[
+                        ast.Visibilities.PUBLIC,
+                        ast.Visibilities.PRIVATE,
+                        ast.Visibilities.UNKNOWN,
+                    ],
+                    weights=[
+                        cfg.prob.function_visibility.public,
+                        cfg.prob.function_visibility.private if not (abstract or is_interface or declared_as_override or nested_function) else 0,
+                        cfg.prob.function_visibility.not_specified,
+                    ]
+                )[0]
+        else:
+            if nested_function:
+                assert visibility == ast.Visibilities.UNKNOWN, "Local functions can't be private/public"
+
+        is_locally_open = (
+                    visibility.resolve() != ast.Visibilities.PRIVATE and
+                    (
+                            abstract or
+                            is_interface or
+                            (
+                                    class_method and
+                                    (
+                                        # In Kotlin all override methods are open, unless final is written
+                                        (declared_as_override and ut.random.bool(1 - cfg.prob.class_methods_modality.override_final)) or
+                                        # In Kotlin all ordinary methods are final, unless open is written
+                                        (not declared_as_override and ut.random.bool(1 - cfg.prob.class_methods_modality.declaration_final))
+                                    )
+                            )
+                    )
+        )
         # All the functions that are inlineable are inlined
         is_inline = (not abstract and
                      not nested_function and
@@ -359,12 +386,13 @@ class Generator():
             func_type=(ast.FunctionDeclaration.CLASS_METHOD
                        if class_method
                        else ast.FunctionDeclaration.FUNCTION),
-            is_final=not can_override,
+            is_final=not is_locally_open,
             is_inline=is_inline,
             inferred_type=None,
             type_parameters=type_params,
             inherits_param_with_default=inherits_param_with_default,
             visibility=visibility,
+            override=declared_as_override
         )
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:
@@ -568,7 +596,7 @@ class Generator():
             else cfg.limits.cls.max_fields
         fields = []
         if field_type:
-            fields.append(self.gen_field_decl(field_type, curr_cls.is_final))
+            fields.append(self.gen_field_decl(field_type, curr_cls.is_final, visibility=ast.Visibilities.PUBLIC))
         if not super_cls_info:
             for _ in range(ut.random.integer(0, max_fields)):
                 fields.append(
@@ -583,10 +611,15 @@ class Generator():
                     field_type = tp.substitute_type(
                         f.get_type(), super_cls_info.type_var_map)
                     new_f = self.gen_field_decl(field_type, curr_cls.is_final,
-                                                add_to_parent=False)
+                                                add_to_parent=False, declared_as_override=True)
                     new_f.name = f.name
                     new_f.override = True
-                    new_f.is_final = f.is_final
+                    if f.is_immutable:
+                        # val can be overridden by val or var
+                        new_f.is_immutable = ut.random.bool(1 - cfg.prob.override_also_adding_setter)
+                    else:
+                        # var must be overridden by var
+                        new_f.is_immutable = False
                     fields.append(new_f)
                     self._add_node_to_parent(self.namespace, new_f)
                 max_fields = max_fields - len(chosen_fields)
@@ -658,18 +691,24 @@ class Generator():
         max_funcs = max_funcs - 1 if signature else max_funcs
         abstract = not curr_cls.is_regular()
         if fret_type:
+            # This surface is only used to generate methods () -> T for global C(), to be used as val x: T = C().func()
+            # outside of class methods, so we generate only public methods
             funcs.append(
                 self.gen_func_decl(fret_type, not_void=not_void,
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
+                                   is_interface=curr_cls.is_interface(),
+                                   visibility=ast.Visibilities.PUBLIC))
+
         if signature:
+            # Only public methods
             ret_type, params = self._gen_ret_and_paramas_from_sig(signature)
             funcs.append(
                 self.gen_func_decl(ret_type, params=params, not_void=not_void,
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
+                                   is_interface=curr_cls.is_interface(),
+                                   visibility=ast.Visibilities.PUBLIC))
         if not super_cls_info:
             for _ in range(ut.random.integer(0, max_funcs)):
                 funcs.append(
@@ -780,12 +819,9 @@ class Generator():
                                       class_is_final=class_is_final,
                                       params=params,
                                       is_interface=is_interface,
+                                      declared_as_override=True,
                                       inherits_param_with_default=inherits_param_with_default,
                                       type_params=type_params)
-        if func.body is None:
-            new_func.is_final = False
-        # This is set only after generation, make sure modalities are good
-        new_func.override = True
         return new_func
 
     # Where
@@ -849,20 +885,49 @@ class Generator():
 
     def gen_field_decl(self, etype=None,
                        class_is_final=True,
-                       add_to_parent=True) -> ast.FieldDeclaration:
+                       add_to_parent=True, declared_as_override=False,
+                       visibility=None) -> ast.FieldDeclaration:
         """Generate a class Field Declaration.
 
         Args:
             etype: Field type.
             class_is_final: Is the class final.
+            add_to_parent: Add the field to the parent namespace.
+            declared_as_override: Whether the field is declared as an override.
+            visibility: Explicily declared visibility.
         """
         name = gu.gen_identifier('lower')
-        can_override = not class_is_final and ut.random.bool()
-        is_final = ut.random.bool()
+
+        if visibility is None:
+            visibility = ut.random.r.choices(
+                population=[
+                    ast.Visibilities.PUBLIC,
+                    ast.Visibilities.PRIVATE,
+                    ast.Visibilities.UNKNOWN,
+                ],
+                weights=[
+                    cfg.prob.property_visibility.public,
+                    cfg.prob.property_visibility.private if not declared_as_override else 0,
+                    cfg.prob.property_visibility.not_specified,
+                ]
+            )[0]
+
+        is_locally_open = (
+                visibility.resolve() != ast.Visibilities.PRIVATE and
+
+                (
+                    # In Kotlin all override fields are open, unless final is written
+                    (declared_as_override and ut.random.bool(1 - cfg.prob.class_fields_modality.override_final)) or
+                    # In Kotlin all ordinary fields are final, unless open is written
+                    (not declared_as_override and ut.random.bool(1 - cfg.prob.class_fields_modality.declaration_final))
+                )
+        )
+
+        is_immutable = ut.random.bool(cfg.prob.class_field_is_immutable)
         field_type = etype or self.select_type(exclude_contravariants=True,
-                                               exclude_covariants=not is_final)
-        field = ast.FieldDeclaration(name, field_type, is_final=is_final,
-                                     can_override=can_override)
+                                               exclude_covariants=not is_immutable)
+        field = ast.FieldDeclaration(name, field_type, is_immutable=is_immutable, visibility=visibility,
+                                     can_override=is_locally_open)
         if add_to_parent:
             self._add_node_to_parent(self.namespace, field)
         return field
@@ -1103,7 +1168,8 @@ class Generator():
                     field_type=tp.substitute_type(field.get_type(),
                                                   type_var_map)
                 )
-                if not field.is_final:
+                # TODO: Pass context to resolve, as we consider FirStatusResolver to solve EffectiveVisibiliy as well
+                if not field.is_immutable and field.visibility.resolve() != ast.Visibilities.PRIVATE:
                     variables.append((ast.Variable(var.name), field_sub))
         return variables
 
@@ -1120,7 +1186,7 @@ class Generator():
         class_decls = self.context.get_classes(self.namespace).values()
         for c in class_decls:
             for field in c.fields:
-                if not field.is_final:
+                if not field.is_immutable and field.visibility.resolve() != ast.Visibilities.PRIVATE:
                     classes.append((c, field))
         assignable_types = []
         for c, f in classes:

@@ -239,9 +239,17 @@ class KotlinTranslator(BaseTranslator):
 
     @append_to
     def visit_field_decl(self, node):
-        prefix = 'open ' if node.can_override else ''
+        prefix = ''
+        prefix += '' if node.visibility == ast.Visibilities.UNKNOWN else (
+            node.visibility.name + ' '
+        )
+        if node.override:
+            prefix += '' if node.can_override else 'final '
+        else:
+            prefix += 'open ' if node.can_override else ''
+
         prefix += '' if not node.override else 'override '
-        prefix += 'val ' if node.is_final else 'var '
+        prefix += 'val ' if node.is_immutable else 'var '
         res = prefix + node.name + ": " + self.get_type_name(node.field_type)
         self._children_res.append(res)
 
@@ -297,7 +305,13 @@ class KotlinTranslator(BaseTranslator):
             children_res[len_params:len_type_params + len_params])
         body_res = children_res[-1] if node.body else ''
         prefix = " " * old_ident
-        prefix += "" if node.is_final else "open "
+        prefix += '' if node.visibility == ast.Visibilities.UNKNOWN else (
+            node.visibility.name + ' '
+        )
+        if node.override:
+            prefix += "" if not node.is_final else "final "
+        else:
+            prefix += "" if node.is_final else "open "
         prefix += "" if not node.is_inline else "inline "
         prefix += "" if not node.override else "override "
         prefix += "" if node.body is not None else "abstract "
