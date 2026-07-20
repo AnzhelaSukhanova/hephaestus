@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from contextlib import contextmanager
 
 from src import utils
 from src.ir import ast
@@ -14,6 +15,7 @@ class Context():
 
     def push_call_context(self, callcontext):
         self._call_stack.append(callcontext)
+        self._typed_call_stacks[type(callcontext)].append(callcontext)
 
     def pop_call_context(self):
         if not self._call_stack:
@@ -24,6 +26,30 @@ class Context():
         if not self._call_stack:
             return None
         return self._call_stack[-1]
+    def current_call_context(self, frame_type=None):
+        if frame_type is None:
+            if not self._call_stack:
+                return None
+            return self._call_stack[-1]
+
+        if self.has_call_context(frame_type):
+            return self._typed_call_stacks[frame_type][-1]
+        else:
+            return None
+
+    @contextmanager
+    def isolate_call_stacks(self):
+        initial_call_stack = self._call_stack
+        initial_typed_call_stacks = self._typed_call_stacks
+
+        self._call_stack = []
+        self._typed_call_stacks = defaultdict(list)
+        try:
+            yield
+            assert not self._call_stack, "Must pop everything out"
+        finally:
+            self._call_stack = initial_call_stack
+            self._typed_call_stacks = initial_typed_call_stacks
 
     def call_contaxt_stack_suffix_types(self, *frame_types) -> bool:
         stack = self._call_stack

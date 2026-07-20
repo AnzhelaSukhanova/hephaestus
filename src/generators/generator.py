@@ -2781,6 +2781,18 @@ class Generator():
                                                       'functions',
                                                       signature=signature)
 
+    def _isolated_generation(self, starting_namespace = ast.GLOBAL_NAMESPACE):
+        initial_inside_inline = self._inside_inline_function
+        initial_namespace = self.namespace
+        self._inside_inline_function = False
+        self.namespace = starting_namespace
+        try:
+            with self.context.isolate_call_stacks():
+                yield
+        finally:
+            self._inside_inline_function = initial_inside_inline
+            self.namespace = initial_namespace
+
     def _gen_matching_func(self,
                            etype: tp.Type,
                            not_void=False,
@@ -3064,7 +3076,7 @@ class Generator():
             An AttrAccessInfo for the generated class type and attribute
             declaration (field or function).
         """
-        initial_namespace = self.namespace
+
         class_name = gu.gen_identifier('capitalize')
         type_params = None
 
@@ -3074,26 +3086,23 @@ class Generator():
             # is a type parameter. The only way to achieve this is to create
             # a parameterized class, and pass the type parameter 'etype'
             # as a type argument to the corresponding type constructor.
-            self.namespace = ast.GLOBAL_NAMESPACE + (class_name,)
-            type_params, type_var_map, can_wildcard = \
-                self._create_type_params_from_etype(etype)
-            etype2 = tp.substitute_type(etype, type_var_map)
+            with self._isolated_generation(starting_namespace=ast.GLOBAL_NAMESPACE + (class_name,)):
+                type_params, type_var_map, can_wildcard = \
+                    self._create_type_params_from_etype(etype)
+                etype2 = tp.substitute_type(etype, type_var_map)
         else:
             type_var_map, etype2, can_wildcard = {}, etype, False
 
-        self.namespace = ast.GLOBAL_NAMESPACE
-
-        # Create class
-        if attr_name == 'functions':
-            kwargs = {'fret_type': etype2} if not signature \
-                else {'signature': etype2}
-        else:
-            kwargs = {'field_type': etype2}
-        cls = self.gen_class_decl(**kwargs, not_void=not_void,
-                                  type_params=type_params,
-                                  class_name=class_name)
-        self.namespace = initial_namespace
-
+        with self._isolated_generation():
+            # Create class
+            if attr_name == 'functions':
+                kwargs = {'fret_type': etype2} if not signature \
+                    else {'signature': etype2}
+            else:
+                kwargs = {'field_type': etype2}
+            cls = self.gen_class_decl(**kwargs, not_void=not_void,
+                                      type_params=type_params,
+                                      class_name=class_name)
         # Get receiver
         if cls.is_parameterized():
             type_map = {v: k for k, v in type_var_map.items()}
