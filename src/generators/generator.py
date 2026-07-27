@@ -61,6 +61,10 @@ class ExprCallSite(CallContext):
 class PublicApiInlineBody(CallContext):
     callee: ast.FunctionDeclaration
 
+@dataclass(frozen=True)
+class GenerationOngoingForInlineFunctionBody(CallContext):
+    func: ast.FunctionDeclaration
+
 class Generator():
     # TODO document
     def __init__(self,
@@ -2565,17 +2569,26 @@ class Generator():
             if ret_type == self.bt_factory.get_void_type()
             else ret_type
         )
-        self.context.push_call_context(FunctionBodyGeneration(func))
-        pushed_public_inline = False
-        if (
-            func is not None and
-            func.is_inline and
-            func.visibility.resolve().is_public_api
+        with self.context.call_contexts(
+            subtree_pushed_call_context=[
+                FunctionBodyGeneration(func),
+                PublicApiInlineBody(func)
+                    if (
+                        isinstance(func, ast.FunctionDeclaration) and
+                        func.is_inline and
+                        func.visibility.resolve().is_public_api
+                    )
+                    else None
+            ],
+            persistent_pushed_call_context=[
+                GenerationOngoingForInlineFunctionBody(func)
+                if (
+                        isinstance(func, ast.FunctionDeclaration) and
+                        func.is_inline
+                )
+                else None,
+            ]
         ):
-            self.context.push_call_context(PublicApiInlineBody(func))
-            pushed_public_inline = True
-
-        try:
             expr = self.generate_expr(expr_type)
             decls = list(self.context.get_declarations(
                 self.namespace, True).values())
@@ -2589,10 +2602,7 @@ class Generator():
             else:
                 exprs, decls = self._gen_side_effects(func)
                 body = ast.Block(decls + exprs + [expr])
-        finally:
-            self.context.pop_call_context()
-            if pushed_public_inline:
-                self.context.pop_call_context()
+
         return body
 
     # Where

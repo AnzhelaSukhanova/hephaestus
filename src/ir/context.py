@@ -1,9 +1,41 @@
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, Counter
 from contextlib import contextmanager
 
 from src import utils
 from src.ir import ast
 
+class StackWithCounter(list):
+    def __init__(self):
+        super().__init__()
+        self._counter = Counter() # O(1) amortized contains(element) checker
+
+    def append(self, object):
+        super().append(object)
+        self._counter[object] += 1
+
+    def pop(self, index=-1):
+        object = super().pop(index)
+        self._counter[object] -= 1
+        if self._counter[object] == 0:
+            del self._counter[object]
+        return object
+
+    def contains(self, object):
+        return self._counter[object] > 0
+
+    def _unsupported_mutation(self, *args, **kwargs):
+        raise TypeError("StackWithCounter: unsupported mutation")
+
+    extend = _unsupported_mutation
+    insert = _unsupported_mutation
+    remove = _unsupported_mutation
+    clear = _unsupported_mutation
+    reverse = _unsupported_mutation
+    sort = _unsupported_mutation
+    __setitem__ = _unsupported_mutation
+    __delitem__ = _unsupported_mutation
+    __iadd__ = _unsupported_mutation
+    __imul__ = _unsupported_mutation
 
 class Context():
 
@@ -14,15 +46,15 @@ class Context():
 
         # LOCAL TO AST SUBTREE
         # Cleared when we temporarily go to other AST subtree (to general global helper function for example). This is the main one
-        self._subtree_call_stack = []
+        self._subtree_call_stack = StackWithCounter()
         # Optimization on top of self._subtree_call_stack to get O(1) access to last call of each type
-        self._typed_subtree_call_stacks = defaultdict(list)
+        self._typed_subtree_call_stacks = defaultdict(StackWithCounter)
 
         # PERSISTENT
         # Persists during AST subtree jumps (inside of global function generation)
-        self._persistent_call_stack = []
+        self._persistent_call_stack = StackWithCounter()
         # Optimization on top of self._persistent_call_stack to get O(1) access to last call of each type
-        self._typed_persistent_call_stacks = defaultdict(list)
+        self._typed_persistent_call_stacks = defaultdict(StackWithCounter)
 
     # HELPERS TO WORK WITH ANY STACKED CONTEXT
     def _push_call_context(self, callcontext, call_stack, typed_call_stacks):
@@ -63,21 +95,6 @@ class Context():
     def current_call_context(self, frame_type=None):
         return self._current_call_context(self._subtree_call_stack, self._typed_subtree_call_stacks, frame_type)
 
-    # SUBTREE ISOLATION
-    @contextmanager
-    def isolate_call_stacks(self):
-        initial_call_stack = self._subtree_call_stack
-        initial_typed_call_stacks = self._typed_subtree_call_stacks
-
-        self._subtree_call_stack = []
-        self._typed_subtree_call_stacks = defaultdict(list)
-        try:
-            yield
-            assert not self._subtree_call_stack, "Must pop everything out"
-        finally:
-            self._subtree_call_stack = initial_call_stack
-            self._typed_subtree_call_stacks = initial_typed_call_stacks
-
     # SUBTREE STACK SUFFIX, TAIL
     def call_contaxt_stack_suffix_types(self, *frame_types) -> bool:
         stack = self._subtree_call_stack
@@ -105,6 +122,41 @@ class Context():
 
     def current_persistent_call_context(self, frame_type=None):
         return self._current_call_context(self._persistent_call_stack, self._typed_persistent_call_stacks, frame_type)
+
+    # GLOBAL CONTEXT MANAGEMENT
+    # Subtree isolation
+    @contextmanager
+    def isolate_call_stacks(self):
+        initial_call_stack = self._subtree_call_stack
+        initial_typed_call_stacks = self._typed_subtree_call_stacks
+
+        self._subtree_call_stack = StackWithCounter()
+        self._typed_subtree_call_stacks = defaultdict(StackWithCounter)
+        try:
+            yield
+            assert not self._subtree_call_stack, "Must pop everything out"
+        finally:
+            self._subtree_call_stack = initial_call_stack
+            self._typed_subtree_call_stacks = initial_typed_call_stacks
+
+    @contextmanager
+    def call_contexts(self, subtree_pushed_call_context=(), persistent_pushed_call_context=()):
+        subtree_pushed_call_context = [frame for frame in subtree_pushed_call_context if frame is not None]
+        persistent_pushed_call_context = [frame for frame in persistent_pushed_call_context if frame is not None]
+
+        for frame in subtree_pushed_call_context:
+            self.push_call_context(frame)
+        for frame in persistent_pushed_call_context:
+            self.push_persistent_call_context(frame)
+
+        try:
+                yield
+        finally:
+            for expected in reversed(persistent_pushed_call_context):
+                assert self.pop_persistent_call_context() is expected
+            for expected in reversed(subtree_pushed_call_context):
+                assert self.pop_call_context() is expected
+
 
     def _add_entity(self, namespace, entity, name, value):
         if namespace in self._context:
