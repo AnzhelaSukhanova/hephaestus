@@ -46,7 +46,7 @@ class IncrementalDAGTransitiveClosure:
         self.predecessors[vertex]
 
     def reaches(self, source, target):
-        return target in self.reachable[source]
+        return target in self.reachable.get(source, ())
 
     def would_create_cycle(self, source, target):
         return source == target or self.reaches(target, source)

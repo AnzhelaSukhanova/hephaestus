@@ -36,6 +36,7 @@ from src.ir.ast import ParameterDeclaration
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
+from src.ir.data_structures import IncrementalDAGTransitiveClosure
 from src.modules.logging import Logger, log
 
 from src.debug_tools import called_by_suffix, call_stack_tail
@@ -110,6 +111,7 @@ class Generator():
         self._blacklisted_classes: set = set()
 
         self.inline_functions: set = set()
+        self.inline_call_graph = IncrementalDAGTransitiveClosure()
         # Track if we're currently inside an inline function body
         self._inside_inline_function: bool = False
 
@@ -122,6 +124,7 @@ class Generator():
         and then it generates the main function.
         """
         self.context = context or Context()
+        self.inline_call_graph = IncrementalDAGTransitiveClosure()
         for _ in ut.random.range(cfg.limits.min_top_level,
                                  cfg.limits.max_top_level):
             self.gen_top_level_declaration()
@@ -245,7 +248,9 @@ class Generator():
                       inherits_param_with_default=False,
                       type_params:List[tp.TypeParameter]=None,
                       namespace=None,
-                      visibility:ast.Visibility=None) -> ast.FunctionDeclaration:
+                      visibility:ast.Visibility=None,
+                      required_inline_call_source: ast.FunctionDeclaration = None
+                      ) -> ast.FunctionDeclaration:
         """Generate a function declaration.
 
         This method is responsible for generating all types of function/methods,
@@ -265,6 +270,9 @@ class Generator():
             type_params: list of type parameters for parameterized function.
             namespace: set explicit namespace.
             visibility: declare explicit visibility.
+            required_inline_call_source: if this function is generated as an
+                immediate callee of an inline function, pre-register the edge
+                before generating this function's body.
 
         Returns:
             A function declaration node.
@@ -412,6 +420,9 @@ class Generator():
 
         if func.is_inline:
             self.inline_functions.add(func)
+            if required_inline_call_source is not None:
+                assert self.inline_call_graph.add_edge(
+                    required_inline_call_source, func)
 
         if func.body is not None:
             body = self._gen_func_body(ret_type, func)
@@ -470,7 +481,8 @@ class Generator():
                        not_void: bool=False,
                        type_params: List[tp.TypeParameter]=None,
                        class_name: str=None,
-                       signature: tp.ParameterizedType=None
+                       signature: tp.ParameterizedType=None,
+                       required_inline_call_source: ast.FunctionDeclaration = None
                        ) -> ast.ClassDeclaration:
         """Generate a class declaration.
 
@@ -484,6 +496,8 @@ class Generator():
             type_params: List with type parameters.
             class_name: Class name.
             signature: Generate at least one function with the given signature.
+            required_inline_call_source: inline function that will directly
+                call the requested generated method.
 
         Returns:
             A class declaration node.
@@ -518,8 +532,9 @@ class Generator():
         if not cls.is_interface():
             self.gen_class_fields(cls, super_cls_info, field_type)
 
-        self.gen_class_functions(cls, super_cls_info,
-                                 not_void, fret_type, signature)
+        self.gen_class_functions(
+            cls, super_cls_info, not_void, fret_type, signature,
+            required_inline_call_source)
         self._blacklisted_classes.remove(class_name)
         self.namespace = initial_namespace
         self.depth = initial_depth
@@ -682,7 +697,9 @@ class Generator():
                             curr_cls, super_cls_info,
                             not_void=False,
                             fret_type=None,
-                            signature: tp.ParameterizedType=None
+                            signature: tp.ParameterizedType=None,
+                            required_inline_call_source:
+                            ast.FunctionDeclaration = None
                             ) -> List[ast.FunctionDeclaration]:
         """Generate methods for a class.
 
@@ -696,6 +713,8 @@ class Generator():
             not_void: Do not create methods that return void.
             fret_type: At least one method will return this type.
             signature: Generate at least one function with the given signature.
+            required_inline_call_source: inline function that will directly
+                call the requested generated method.
         """
         funcs = []
         max_funcs = cfg.limits.cls.max_funcs - 1 if fret_type \
@@ -710,7 +729,8 @@ class Generator():
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
                                    is_interface=curr_cls.is_interface(),
-                                   visibility=ast.Visibilities.PUBLIC))
+                                   visibility=ast.Visibilities.PUBLIC,
+                                   required_inline_call_source=required_inline_call_source))
 
         if signature:
             # Only public methods
@@ -720,7 +740,8 @@ class Generator():
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
                                    is_interface=curr_cls.is_interface(),
-                                   visibility=ast.Visibilities.PUBLIC))
+                                   visibility=ast.Visibilities.PUBLIC,
+                                   required_inline_call_source=required_inline_call_source))
         if not super_cls_info:
             for _ in range(ut.random.integer(0, max_funcs)):
                 funcs.append(
@@ -994,11 +1015,41 @@ class Generator():
                 for attr in attributes
                 if getattr(attr, 'visibility').resolve() != ast.Visibilities.PRIVATE]
 
+    ## PUBLIC API CHECKERS ##
     def _call_site_visibility_allowed_by_public_api_inline_checkers(self, decl):
         if self.context.has_call_context(PublicApiInlineBody):
             if not getattr(decl, 'visibility', ast.Visibilities.PUBLIC).resolve().is_public_api:
                 return False
         return True
+
+    ## INLINE CYCLE CHECKERS ##
+    def _current_inline_source(self):
+        frame = self.context.current_call_context(FunctionBodyGeneration)
+        if frame is None:
+            return None
+        func = frame.callee
+        if isinstance(func, ast.FunctionDeclaration) and func.is_inline:
+            return func
+        return None
+
+    def _requires_inline_edge(self, callee):
+        return (
+            self._current_inline_source() is not None and
+            isinstance(callee, ast.FunctionDeclaration) and
+            callee.is_inline
+        )
+
+    def _inline_edge_allowed(self, callee):
+        if not self._requires_inline_edge(callee):
+            return True
+        source = self._current_inline_source()
+        return self.inline_call_graph.can_add_edge(source, callee)
+
+    def _record_inline_edge(self, callee):
+        if not self._requires_inline_edge(callee):
+            return
+        source = self._current_inline_source()
+        assert self.inline_call_graph.add_edge(source, callee)
 
     # This function respects call sites, and when generate_expr tries to redo generation on failure, it doesn't add new ExprCallSites
     def generate_expr(self,
@@ -1754,19 +1805,11 @@ class Generator():
         log(self.logger, "Generating function call of type {}".format(etype))
         funcs = self._get_matching_function_declarations(etype, subtype)
 
-        initial_namespace = self.namespace
         rand_func = None
         func = None
-        while not func and funcs:
+        if funcs:
             rand_func = ut.random.choice(funcs)
             func = rand_func.attr_decl
-
-            # Check for recursive calls of inline functions
-            if isinstance(func, ast.FunctionDeclaration) and func.is_inline:
-                for cur_namespace in initial_namespace:
-                    if cur_namespace == func.name:
-                        funcs.remove(rand_func)
-                        func = None
         if not funcs:
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
@@ -1789,6 +1832,7 @@ class Generator():
                          type_fun.attr_decl, type_fun.attr_inst))
             rand_func = ut.random.choice(funcs)
             func = rand_func.attr_decl
+        self._record_inline_edge(func)
         receiver = rand_func.receiver_expr
         params_map = rand_func.receiver_inst
         func_type_map = rand_func.attr_inst
@@ -2684,6 +2728,11 @@ class Generator():
                 continue
             cls, type_map_var = self._get_class(var_type)
             for attr in self._get_class_attributes(cls, attr_name):
+                if (
+                        attr_name == 'functions' and
+                        not signature and
+                        not self._inline_edge_allowed(attr)):
+                    continue
                 attr_type = tp.substitute_type(
                     attr.get_type(), type_map_var)
                 if attr_type == self.bt_factory.get_void_type():
@@ -2819,6 +2868,8 @@ class Generator():
             # Public API inline functions can't access non-public API methods
             if not self._call_site_visibility_allowed_by_public_api_inline_checkers(func):
                 continue
+            if not signature and not self._inline_edge_allowed(func):
+                continue
 
             type_var_map = {}
             if func.is_parameterized():
@@ -2871,6 +2922,9 @@ class Generator():
             not_void: do not create functions that return void.
             signature: etype is a signature.
         """
+        required_inline_call_source = (
+            None if signature else self._current_inline_source()
+        )
         # Randomly choose to generate a function or a class method.
         gen_method = (
             ut.random.bool(cfg.prob.helper_functions.is_global_method) or
@@ -2907,7 +2961,9 @@ class Generator():
             params = None
             if signature:
                 etype, params = self._gen_ret_and_paramas_from_sig(etype)
-            func = self.gen_func_decl(etype, params=params, not_void=not_void)
+            func = self.gen_func_decl(
+                etype, params=params, not_void=not_void,
+                required_inline_call_source=required_inline_call_source)
             self.namespace = initial_namespace
             func_type_var_map = {}
             if func.is_parameterized():
@@ -2921,7 +2977,8 @@ class Generator():
         # Generate a class containing the requested function
         # Class is not generated as local class, fine for inlining
         return self._gen_matching_class(etype, 'functions',
-                                        signature=signature)
+                                        signature=signature,
+                                        required_inline_call_source=required_inline_call_source)
 
     def _get_matching_class(self,
                             etype: tp.Type,
@@ -3112,6 +3169,11 @@ class Generator():
         class_decls = []
         for c in self.context.get_classes(self.namespace).values():
             for attr in self._get_class_attributes(c, attr_name):
+                if (
+                        attr_name == 'functions' and
+                        not signature and
+                        not self._inline_edge_allowed(attr)):
+                    continue
                 attr_type = attr.get_type()
                 if not attr_type:
                     continue
@@ -3134,7 +3196,10 @@ class Generator():
                             etype: tp.Type,
                             attr_name: str,
                             not_void=False,
-                            signature=False) -> gu.AttrAccessInfo:
+                            signature=False,
+                            required_inline_call_source:
+                            ast.FunctionDeclaration = None
+                            ) -> gu.AttrAccessInfo:
         """Generate a class that has an attribute of attr_name that is/return etype.
 
         Args:
@@ -3143,6 +3208,8 @@ class Generator():
             attr_name: 'fields' or 'functions'
             not_void: Functions of the class should not return void.
             signature: etype is a signature.
+            required_inline_call_source: inline function that will directly
+                call the requested generated method.
 
         Returns:
             An AttrAccessInfo for the generated class type and attribute
@@ -3174,7 +3241,12 @@ class Generator():
                 kwargs = {'field_type': etype2}
             cls = self.gen_class_decl(**kwargs, not_void=not_void,
                                       type_params=type_params,
-                                      class_name=class_name)
+                                      class_name=class_name,
+                                      required_inline_call_source=(
+                                          required_inline_call_source
+                                          if attr_name == 'functions'
+                                          else None
+                                      ))
         # Get receiver
         if cls.is_parameterized():
             type_map = {v: k for k, v in type_var_map.items()}
@@ -3200,6 +3272,11 @@ class Generator():
 
         # Generate func_type_var_map
         for attr in getattr(cls, attr_name):
+            if (
+                    attr_name == 'functions' and
+                    not signature and
+                    not self._inline_edge_allowed(attr)):
+                continue
             if not self._is_sigtype_compatible(attr, etype, params_map,
                                                signature, False):
                 continue
