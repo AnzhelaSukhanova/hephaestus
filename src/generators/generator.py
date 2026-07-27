@@ -61,10 +61,6 @@ class ExprCallSite(CallContext):
 class PublicApiInlineBody(CallContext):
     callee: ast.FunctionDeclaration
 
-@dataclass(frozen=True)
-class GenerationOngoingForInlineFunctionBody(CallContext):
-    func: ast.FunctionDeclaration
-
 class Generator():
     # TODO document
     def __init__(self,
@@ -1325,7 +1321,7 @@ class Generator():
             valid_usage_of_inline_param = False
             debug_param_str = ""
 
-            if self.context.call_contaxt_stack_suffix_types(FunctionCallParamGeneration, ExprCallSite):
+            if self.context.call_context_stack_suffix_types(FunctionCallParamGeneration, ExprCallSite):
                 # Direct call from FunctionCallParamGeneration
                 # TODO: is there a better way?
                 assert isinstance(self.context._subtree_call_stack[-2], FunctionCallParamGeneration)
@@ -2579,14 +2575,6 @@ class Generator():
                         func.visibility.resolve().is_public_api
                     )
                     else None
-            ],
-            persistent_pushed_call_context=[
-                GenerationOngoingForInlineFunctionBody(func)
-                if (
-                        isinstance(func, ast.FunctionDeclaration) and
-                        func.is_inline
-                )
-                else None,
             ]
         ):
             expr = self.generate_expr(expr_type)

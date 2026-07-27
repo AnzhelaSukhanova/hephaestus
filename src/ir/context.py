@@ -16,13 +16,13 @@ class Context():
         # Cleared when we temporarily go to other AST subtree (to general global helper function for example). This is the main one
         self._subtree_call_stack = StackWithCounter()
         # Optimization on top of self._subtree_call_stack to get O(1) access to last call of each type
-        self._typed_subtree_call_stacks = defaultdict(StackWithCounter)
+        self._typed_subtree_call_stacks = defaultdict(list)
 
         # PERSISTENT
         # Persists during AST subtree jumps (inside of global function generation)
         self._persistent_call_stack = StackWithCounter()
         # Optimization on top of self._persistent_call_stack to get O(1) access to last call of each type
-        self._typed_persistent_call_stacks = defaultdict(StackWithCounter)
+        self._typed_persistent_call_stacks = defaultdict(list)
 
     # HELPERS TO WORK WITH ANY STACKED CONTEXT
     def _push_call_context(self, callcontext, call_stack, typed_call_stacks):
@@ -64,7 +64,7 @@ class Context():
         return self._current_call_context(self._subtree_call_stack, self._typed_subtree_call_stacks, frame_type)
 
     # SUBTREE STACK SUFFIX, TAIL
-    def call_contaxt_stack_suffix_types(self, *frame_types) -> bool:
+    def call_context_stack_suffix_types(self, *frame_types) -> bool:
         stack = self._subtree_call_stack
         n = len(frame_types)
 
@@ -98,8 +98,8 @@ class Context():
         initial_call_stack = self._subtree_call_stack
         initial_typed_call_stacks = self._typed_subtree_call_stacks
 
-        self._subtree_call_stack = StackWithCounter()
-        self._typed_subtree_call_stacks = defaultdict(StackWithCounter)
+        self._subtree_call_stack = []
+        self._typed_subtree_call_stacks = defaultdict(list)
         try:
             yield
             assert not self._subtree_call_stack, "Must pop everything out"
