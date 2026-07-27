@@ -1,41 +1,9 @@
-from collections import OrderedDict, defaultdict, Counter
+from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
 
 from src import utils
 from src.ir import ast
-
-class StackWithCounter(list):
-    def __init__(self):
-        super().__init__()
-        self._counter = Counter() # O(1) amortized contains(element) checker
-
-    def append(self, object):
-        super().append(object)
-        self._counter[object] += 1
-
-    def pop(self, index=-1):
-        object = super().pop(index)
-        self._counter[object] -= 1
-        if self._counter[object] == 0:
-            del self._counter[object]
-        return object
-
-    def contains(self, object):
-        return self._counter[object] > 0
-
-    def _unsupported_mutation(self, *args, **kwargs):
-        raise TypeError("StackWithCounter: unsupported mutation")
-
-    extend = _unsupported_mutation
-    insert = _unsupported_mutation
-    remove = _unsupported_mutation
-    clear = _unsupported_mutation
-    reverse = _unsupported_mutation
-    sort = _unsupported_mutation
-    __setitem__ = _unsupported_mutation
-    __delitem__ = _unsupported_mutation
-    __iadd__ = _unsupported_mutation
-    __imul__ = _unsupported_mutation
+from src.ir.data_structures import StackWithCounter
 
 class Context():
 
