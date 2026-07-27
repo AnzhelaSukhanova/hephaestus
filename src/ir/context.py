@@ -11,51 +11,76 @@ class Context():
         self._context = {}
         # A lookup from declarations to namespaces
         self._namespaces = {}
-        self._call_stack = []
-        # Optimization on top of self._call_stack to get O(1) access to last call of each type
-        self._typed_call_stacks = defaultdict(list)
 
-    def push_call_context(self, callcontext):
-        self._call_stack.append(callcontext)
-        self._typed_call_stacks[type(callcontext)].append(callcontext)
+        # LOCAL TO AST SUBTREE
+        # Cleared when we temporarily go to other AST subtree (to general global helper function for example). This is the main one
+        self._subtree_call_stack = []
+        # Optimization on top of self._subtree_call_stack to get O(1) access to last call of each type
+        self._typed_subtree_call_stacks = defaultdict(list)
 
-    def pop_call_context(self):
-        if not self._call_stack:
+        # PERSISTENT
+        # Persists during AST subtree jumps (inside of global function generation)
+        self._persistent_call_stack = []
+        # Optimization on top of self._persistent_call_stack to get O(1) access to last call of each type
+        self._typed_persistent_call_stacks = defaultdict(list)
+
+    # HELPERS TO WORK WITH ANY STACKED CONTEXT
+    def _push_call_context(self, callcontext, call_stack, typed_call_stacks):
+        call_stack.append(callcontext)
+        typed_call_stacks[type(callcontext)].append(callcontext)
+
+    def _pop_call_context(self, call_stack, typed_call_stacks):
+        if not call_stack:
             return None
-        last_call_context = self._call_stack.pop()
-        assert self._typed_call_stacks[type(last_call_context)].pop() is last_call_context
+        last_call_context = call_stack.pop()
+        assert typed_call_stacks[type(last_call_context)].pop() is last_call_context
         return last_call_context
 
-    def has_call_context(self, frame_type):
-        return bool(self._typed_call_stacks.get(frame_type, []))
+    def _has_call_context(self, frame_type, typed_call_stacks):
+        return bool(typed_call_stacks.get(frame_type, []))
 
-    def current_call_context(self, frame_type=None):
+    def _current_call_context(self, call_stack, typed_call_stacks, frame_type=None):
         if frame_type is None:
-            if not self._call_stack:
+            if not call_stack:
                 return None
-            return self._call_stack[-1]
+            return call_stack[-1]
 
-        if self.has_call_context(frame_type):
-            return self._typed_call_stacks[frame_type][-1]
+        if self._has_call_context(frame_type, typed_call_stacks):
+            return typed_call_stacks[frame_type][-1]
         else:
             return None
 
+    # AST SUBTREE CALL STACK
+    def push_call_context(self, callcontext):
+        self._push_call_context(callcontext, self._subtree_call_stack, self._typed_subtree_call_stacks)
+
+    def pop_call_context(self):
+        return self._pop_call_context(self._subtree_call_stack, self._typed_subtree_call_stacks)
+
+    def has_call_context(self, frame_type):
+        return self._has_call_context(frame_type, self._typed_subtree_call_stacks)
+
+    def current_call_context(self, frame_type=None):
+        return self._current_call_context(self._subtree_call_stack, self._typed_subtree_call_stacks, frame_type)
+
+    # SUBTREE ISOLATION
     @contextmanager
     def isolate_call_stacks(self):
-        initial_call_stack = self._call_stack
-        initial_typed_call_stacks = self._typed_call_stacks
+        initial_call_stack = self._subtree_call_stack
+        initial_typed_call_stacks = self._typed_subtree_call_stacks
 
-        self._call_stack = []
-        self._typed_call_stacks = defaultdict(list)
+        self._subtree_call_stack = []
+        self._typed_subtree_call_stacks = defaultdict(list)
         try:
             yield
-            assert not self._call_stack, "Must pop everything out"
+            assert not self._subtree_call_stack, "Must pop everything out"
         finally:
-            self._call_stack = initial_call_stack
-            self._typed_call_stacks = initial_typed_call_stacks
+            self._subtree_call_stack = initial_call_stack
+            self._typed_subtree_call_stacks = initial_typed_call_stacks
 
+    # SUBTREE STACK SUFFIX, TAIL
     def call_contaxt_stack_suffix_types(self, *frame_types) -> bool:
-        stack = self._call_stack
+        stack = self._subtree_call_stack
         n = len(frame_types)
 
         if len(stack) < n:
@@ -66,7 +91,20 @@ class Context():
                    for frame, expected in zip(suffix, frame_types))
 
     def call_context_tail(self, limit: int = 4):
-        return tuple(self._call_stack[-limit:])
+        return tuple(self._subtree_call_stack[-limit:])
+
+    # PERSISTENT CALL STACK
+    def push_persistent_call_context(self, callcontext):
+        self._push_call_context(callcontext, self._persistent_call_stack, self._typed_persistent_call_stacks)
+
+    def pop_persistent_call_context(self):
+        return self._pop_call_context(self._persistent_call_stack, self._typed_persistent_call_stacks)
+
+    def has_persistent_call_context(self, frame_type):
+        return self._has_call_context(frame_type, self._typed_persistent_call_stacks)
+
+    def current_persistent_call_context(self, frame_type=None):
+        return self._current_call_context(self._persistent_call_stack, self._typed_persistent_call_stacks, frame_type)
 
     def _add_entity(self, namespace, entity, name, value):
         if namespace in self._context:

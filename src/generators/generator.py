@@ -1324,9 +1324,9 @@ class Generator():
             if self.context.call_contaxt_stack_suffix_types(FunctionCallParamGeneration, ExprCallSite):
                 # Direct call from FunctionCallParamGeneration
                 # TODO: is there a better way?
-                assert isinstance(self.context._call_stack[-2], FunctionCallParamGeneration)
-                debug_param_str = "(param) " + self.context._call_stack[-2].target_param.inlining_scope.name + " " + str(self.context._call_stack[-2].target_param.get_type())
-                if self.context._call_stack[-2].target_param.inlining_scope == ast.InliningScope.INLINE:
+                assert isinstance(self.context._subtree_call_stack[-2], FunctionCallParamGeneration)
+                debug_param_str = "(param) " + self.context._subtree_call_stack[-2].target_param.inlining_scope.name + " " + str(self.context._subtree_call_stack[-2].target_param.get_type())
+                if self.context._subtree_call_stack[-2].target_param.inlining_scope == ast.InliningScope.INLINE:
                     # The only case, where inline parameter can be returned by ast.Variable(...) without needing to change to noinline
                     valid_usage_of_inline_param = True
 
@@ -1337,8 +1337,8 @@ class Generator():
                     self._record_escalation(
                         call_stack_semantic=self.context.call_context_tail(2),
                         call_stack_debugger=call_stack_tail(6),
-                        escalated_param_inlining_scope=None if not debug_param_str else self.context._call_stack[-2].target_param.inlining_scope.name,
-                        escalated_details=None if not debug_param_str else str(self.context._call_stack[-2].target_param.get_type())
+                        escalated_param_inlining_scope=None if not debug_param_str else self.context._subtree_call_stack[-2].target_param.inlining_scope.name,
+                        escalated_details=None if not debug_param_str else str(self.context._subtree_call_stack[-2].target_param.get_type())
                     )
                     called_by_suffix("_gen_func_call", "generate_expr", "_generate_expr", 'gen_variable', 'gen_variable')
                 self._escalate_inline_param(param=varia)
