@@ -2154,11 +2154,17 @@ class Generator():
         for func in funcs:
             if func.attr_decl.name == self.namespace[-1]:
                 continue
-            refs.append(ast.FunctionReference(
-                func.attr_decl.name, func.receiver_expr, etype))
+            ref = ast.FunctionReference(
+                func.attr_decl.name, func.receiver_expr, etype,
+                target_decl=func.attr_decl)
+            if not self._inline_edge_allowed(ref.target_decl):
+                continue
+            refs.append(ref)
 
         if refs:
-            return ut.random.choice(refs)
+            ref = ut.random.choice(refs)
+            self._record_inline_edge(ref.target_decl)
+            return ref
 
         ref = None
         # NOTE a maximum recursion error may occur.
@@ -2179,7 +2185,11 @@ class Generator():
                                         only_leaves=only_leaves)
             )
             ref = ast.FunctionReference(
-                type_fun.attr_decl.name, receiver, etype)
+                type_fun.attr_decl.name, receiver, etype,
+                target_decl=type_fun.attr_decl)
+            if not self._inline_edge_allowed(ref.target_decl):
+                return None
+            self._record_inline_edge(ref.target_decl)
 
         return ref
 
