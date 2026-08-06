@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 # pylint: disable=too-few-public-methods
 from datetime import datetime
+import fcntl
 import json
 import functools
 import multiprocessing as mp
@@ -12,6 +13,7 @@ import shutil
 import time
 import traceback
 from collections import namedtuple, OrderedDict
+from pathlib import Path
 
 from src.args import args as cli_args, validate_args, pre_process_args
 from src import utils
@@ -25,6 +27,14 @@ from src.translators.scala import ScalaTranslator
 from src.translators.java import JavaTranslator
 from src.modules.processor import ProgramProcessor
 from src.tools.changes_from_ir_dumps import write_program_ir_changes
+from src.tools.ir_coverage import (
+    coverage_compile_cmd,
+    extract_report_classes,
+    lowering_columns,
+    merge_exec_files,
+    prepare_output_dir,
+    write_jacoco_report,
+)
 
 
 STOP_COND = False
@@ -185,12 +195,93 @@ def preserve_final_program_dir(pid):
 
 def preserve_ir_changes_to_tmp(dirname, pid):
     if not cli_args.dump_ir:
-        return
+        return None
     dump_root = os.path.join(dirname, 'src', 'ir')
     dst_dir = os.path.join(cli_args.test_directory, 'tmp', str(pid))
-    write_program_ir_changes(dst_dir, dump_root)
+    out_file = write_program_ir_changes(dst_dir, dump_root)
     if os.path.isdir(dump_root):
         shutil.rmtree(dump_root)
+    with open(out_file) as f:
+        return json.load(f)
+
+
+def jacoco_output_dir():
+    return Path(cli_args.test_directory) / 'coverage'
+
+
+def setup_live_jacoco():
+    # Must run once in the parent process, before the worker pool (if any)
+    # is created: it wipes stale state and does a one-time, somewhat
+    # expensive class-file extraction that every worker will then share.
+    if not cli_args.jacoco_lowerings and not cli_args.jacoco_always:
+        return
+    output_dir = jacoco_output_dir()
+    prepare_output_dir(output_dir)
+    (output_dir / 'execs').mkdir(parents=True, exist_ok=True)
+    (output_dir / 'logs').mkdir(parents=True, exist_ok=True)
+    classes_dir = output_dir / 'classes'
+    classes_dir.mkdir(parents=True, exist_ok=True)
+    extract_report_classes(cli_args.backend, classes_dir)
+    _jacoco_merge_lock_path(output_dir).touch(exist_ok=True)
+
+
+def _jacoco_merge_lock_path(output_dir):
+    return output_dir / '.merge.lock'
+
+
+def _refresh_jacoco_report(output_dir):
+    # Serialize merge + report generation across worker processes: several
+    # pids can finish a live-Jacoco compile at roughly the same time, and
+    # jacococli.jar has no cross-process coordination of its own.
+    with open(_jacoco_merge_lock_path(output_dir), 'w') as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            exec_dir = output_dir / 'execs'
+            pending = sorted(exec_dir.glob('*.exec'))
+            if not pending:
+                return
+            trunk = output_dir / 'jacoco.exec'
+            inputs = ([trunk] if trunk.exists() else []) + pending
+            merged = output_dir / 'jacoco.exec.new'
+            merge_exec_files(inputs, merged)
+            os.replace(merged, trunk)
+            for exec_file in pending:
+                exec_file.unlink()
+            write_jacoco_report(output_dir, output_dir / 'classes',
+                               cli_args.backend)
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def maybe_run_live_jacoco(pid, phase_changes):
+    if cli_args.jacoco_always:
+        pass
+    elif cli_args.jacoco_lowerings and phase_changes:
+        columns = lowering_columns(cli_args.jacoco_lowerings)
+        if not any(phase_changes.get(column) == 1 for column in columns):
+            return
+    else:
+        return
+    program_file = os.path.join(cli_args.test_directory, str(pid), 'program.kt')
+    if not os.path.isfile(program_file):
+        return
+
+    output_dir = jacoco_output_dir()
+    # A given pid is only ever handled by one worker, so its own exec file
+    # has no concurrent writer and needs no locking.
+    dest_file = output_dir / 'execs' / "{}.exec".format(pid)
+    with tempfile.TemporaryDirectory(prefix="hephaestus-live-jacoco-") as tmp:
+        stage_dir = os.path.join(tmp, 'src')
+        utils.mkdir(stage_dir)
+        shutil.copy2(program_file, os.path.join(stage_dir, 'program.kt'))
+        _, out = run_command(
+            coverage_compile_cmd(cli_args.backend, stage_dir, output_dir,
+                                dest_file=dest_file))
+        with open(output_dir / 'logs' / "{}.log".format(pid), 'w') as log:
+            log.write(out)
+
+    if dest_file.exists():
+        _refresh_jacoco_report(output_dir)
 
 
 def save_stats():
@@ -484,8 +575,9 @@ def check_oracle(dirname, oracles):
             print('We found compiler crash')
         for pid, proc_res in oracles.items():
             if not proc_res.failed:
-                preserve_ir_changes_to_tmp(dirname, pid)
+                phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
+                maybe_run_live_jacoco(pid, phase_changes)
                 proc_res.stats['error'] = compiler.crash_msg
                 attach_time_metrics(pid, proc_res.stats, time_metrics)
                 output[pid] = proc_res.stats
@@ -519,8 +611,9 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
-                preserve_ir_changes_to_tmp(dirname, pid)
+                phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
+                maybe_run_live_jacoco(pid, phase_changes)
                 if stop:
                     print(proc_res.stats['error'])
                     sys.exit(1)
@@ -538,11 +631,13 @@ def check_oracle(dirname, oracles):
                 if cli_args.rerun:
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
-                preserve_ir_changes_to_tmp(dirname, pid)
+                phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
+                maybe_run_live_jacoco(pid, phase_changes)
         if cli_args.keep_everything:
-            preserve_ir_changes_to_tmp(dirname, pid)
+            phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
             preserve_final_program_dir(pid)
+            maybe_run_live_jacoco(pid, phase_changes)
         shutil.rmtree(os.path.join(cli_args.test_directory, 'tmp',
                                    str(pid)))
     # Clear the directory of programs.
@@ -692,6 +787,7 @@ def run_parallel():
 def main():
     validate_args(cli_args)
     pre_process_args(cli_args)
+    setup_live_jacoco()
 
     if cli_args.debug or cli_args.workers is None:
         run()

@@ -216,6 +216,24 @@ parser.add_argument(
           "escalation reports; --time-metrics output is still recorded "
           "when requested")
 )
+parser.add_argument(
+    "--jacoco-lowerings",
+    nargs="+",
+    default=None,
+    help=("Compile a program with the JaCoCo agent immediately (instead of "
+          "via the offline src.tools.ir_coverage tool) whenever its IR "
+          "changed in one of these lowering phases, refreshing the merged "
+          "coverage report after every such program. Requires --dump-ir "
+          "and --keep-everything; safe to combine with --workers.")
+)
+parser.add_argument(
+    "--jacoco-always",
+    action="store_true",
+    help=("Like --jacoco-lowerings, but skip the IR-changed check and "
+          "compile with the JaCoCo agent for every preserved program. "
+          "Requires --keep-everything; mutually exclusive with "
+          "--jacoco-lowerings.")
+)
 
 
 args = parser.parse_args()
@@ -309,6 +327,19 @@ def validate_args(args):
 
     if args.time_metrics and args.batch != 1:
         sys.exit("You cannot use --time-metrics with --batch != 1")
+
+    if args.jacoco_lowerings and not args.dump_ir:
+        sys.exit("The --jacoco-lowerings option requires --dump-ir")
+
+    if args.jacoco_lowerings and not args.keep_everything:
+        sys.exit("The --jacoco-lowerings option requires --keep-everything")
+
+    if args.jacoco_lowerings and args.jacoco_always:
+        sys.exit("Options --jacoco-lowerings and --jacoco-always are "
+                 "mutually exclusive. You can't use both.")
+
+    if args.jacoco_always and not args.keep_everything:
+        sys.exit("The --jacoco-always option requires --keep-everything")
 
 
 def pre_process_args(args):

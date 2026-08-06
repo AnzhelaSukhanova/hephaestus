@@ -7,13 +7,13 @@ import time
 
 BACKEND_PHASES = {"backend", "cb"}
 PHASES = [
-    ("06", "LocalClassesInInlineLambdasLowering"),
-    ("08", "PreSerializationPrivateFunctionInlining"),
-    ("10", "OuterThisInInlineFunctionsSpecialAccessorLowering"),
-    ("11", "SyntheticAccessorLowering"),
-    ("13", "FunctionInlining"),
-    ("14", "InlineFunctionSerializationPreProcessing"),
-    ("15", "RedundantCastsRemoverLowering"),
+    ("08", "LocalClassesInInlineLambdasLowering"),
+    ("10", "PreSerializationPrivateFunctionInlining"),
+    ("12", "OuterThisInInlineFunctionsSpecialAccessorLowering"),
+    ("13", "SyntheticAccessorLowering"),
+    ("15", "FunctionInlining"),
+    ("16", "InlineFunctionSerializationPreProcessing"),
+    ("17", "RedundantCastsRemoverLowering"),
 ]
 DEFAULT_OUTPUT = "ir_phase_changes.csv"
 IR_CHANGES_FILENAME = "ir_changes.json"

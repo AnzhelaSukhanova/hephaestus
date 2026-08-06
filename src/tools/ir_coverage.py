@@ -218,19 +218,20 @@ def jacoco_includes(backend):
     return COMMON_JACOCO_INCLUDES
 
 
-def jacoco_agent_arg(output_dir, backend):
+def jacoco_agent_arg(output_dir, backend, dest_file=None):
     agent = repo_root() / "coverage" / "jacocoagent.jar"
     if not agent.exists():
         raise SystemExit("Missing JaCoCo agent jar: {}".format(agent))
+    dest_file = dest_file or (output_dir / "jacoco.exec")
     return (
         "-J-javaagent:{}=destfile={},append=true,"
         "inclnolocationclasses=true,includes={}"
-    ).format(agent, output_dir / "jacoco.exec", jacoco_includes(backend))
+    ).format(agent, dest_file, jacoco_includes(backend))
 
 
-def coverage_compile_cmd(backend, input_name, output_dir):
+def coverage_compile_cmd(backend, input_name, output_dir, dest_file=None):
     return hephaestus_compile_cmd(backend, input_name) + [
-        jacoco_agent_arg(output_dir, backend)
+        jacoco_agent_arg(output_dir, backend, dest_file=dest_file)
     ]
 
 
@@ -344,6 +345,32 @@ def write_manifest(output_dir, rows, columns):
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
     return manifest
+
+
+def merge_exec_files(exec_files, dest_file):
+    cli = repo_root() / "coverage" / "jacococli.jar"
+    if not cli.exists():
+        raise SystemExit("Missing JaCoCo CLI jar: {}".format(cli))
+
+    cmd = [
+        "java",
+        "-jar",
+        str(cli),
+        "merge",
+    ] + [str(exec_file) for exec_file in exec_files] + [
+        "--destfile",
+        str(dest_file),
+    ]
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            "JaCoCo exec merge failed:\n{}".format(proc.stdout))
 
 
 def write_jacoco_report(output_dir, classes_dir, backend):
