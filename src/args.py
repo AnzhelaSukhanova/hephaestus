@@ -137,6 +137,13 @@ parser.add_argument(
     help="Generate programs up to the given depth"
 )
 parser.add_argument(
+    "--inline-default-depth",
+    type=int,
+    default=None,
+    help=("Non-leaf levels allowed inside parameter default values "
+          "(0 = leaf-only defaults)")
+)
+parser.add_argument(
     "--generator-config",
     type=str,
     help="Path to a JSON file overriding generator configuration values"
@@ -254,6 +261,8 @@ if args.max_type_params is not None:
     cfg.limits.max_type_params = args.max_type_params
 if args.max_depth is not None:
     cfg.limits.max_depth = args.max_depth
+if args.inline_default_depth is not None:
+    cfg.limits.inline_default_depth = args.inline_default_depth
 if args.disable_bounded_type_parameters:
     cfg.prob.bounded_type_parameters = 0
 if args.disable_parameterized_functions:

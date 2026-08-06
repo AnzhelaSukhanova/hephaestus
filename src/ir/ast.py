@@ -746,6 +746,8 @@ class ClassDeclaration(Declaration):
         """
         # Get functions that are implemented in the current class
         functions = set(self.functions)
+        # Track which function names are overridden in this class
+        overridden_names = {f.name for f in self.functions}
 
         if not self.superclasses:
             return functions
@@ -763,6 +765,9 @@ class ClassDeclaration(Declaration):
 
         # substitute type variables in parent's functions
         for f in parent_funcs:
+            # Skip parent functions that are overridden in this class
+            if f.name in overridden_names:
+                continue
             new_f = deepcopy(f)
             params = []
             for p in f.params:
@@ -1146,7 +1151,7 @@ class BinaryOp(Expr):
             # @theosotr should we keep this check? If we ant to keep it we may
             # want to check if the operator is valid for a given language
             assert operator in self.ALL_OPERATORS, (
-                'Binary operator ' + operator + ' is not valid')
+                    'Binary operator ' + operator + ' is not valid')
         self.lexpr = lexpr
         self.rexpr = rexpr
         self.operator = operator

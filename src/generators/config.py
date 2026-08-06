@@ -70,6 +70,7 @@ class GenLimits:
     max_top_level: int # max number of top-level declarations
     min_top_level: int # min number of top-level declarations
     max_depth: int # max depth of leaves in programs
+    inline_default_depth: int # generation depth at the inline default
 
 @dataclass
 class VisibilityProbabilities:
@@ -158,26 +159,27 @@ class GenConfig(metaclass=Singleton):
             max_functional_params=3,
             max_top_level=10,
             min_top_level=5,
-            max_depth=6
+            max_depth=6,
+            inline_default_depth=1
         )
         self.prob=Probabilities(
-                function_expr=1.0,
-                bounded_type_parameters=0.5,
-                parameterized_functions=0.3,
-                reified_type_parameters=0.7,
-                func_ref_call=1.0,
-                func_ref=0.5,
-                sam_coercion=1.0,
-                function_visibility=VisibilityProbabilities(
-                    public=0.2,
-                    private=0.5,
-                    not_specified=0.3
-                ),
-                property_visibility=VisibilityProbabilities(
-                    public=0.2,
-                    private=0.5,
-                    not_specified=0.3
-                ),
+            function_expr=1.0,
+            bounded_type_parameters=0.5,
+            parameterized_functions=0.3,
+            reified_type_parameters=0.7,
+            func_ref_call=1.0,
+            func_ref=0.5,
+            sam_coercion=1.0,
+            function_visibility=VisibilityProbabilities(
+                public=0.2,
+                private=0.5,
+                not_specified=0.3
+            ),
+            property_visibility=VisibilityProbabilities(
+                public=0.2,
+                private=0.5,
+                not_specified=0.3
+            ),
             class_methods_modality=ModalityProbabilities(
                 override_final=0.5,
                 declaration_final=0.5
