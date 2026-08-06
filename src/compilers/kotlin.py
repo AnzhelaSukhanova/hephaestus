@@ -36,7 +36,7 @@ class KotlinCompiler(BaseCompiler):
     def _get_compiler_cmd(self, input_name):
         if is_native:
             return [compiler, input_name, '-produce', 'library', '-o', input_name,
-                        '-nowarn']
+                        '-nowarn', '-Xklib-ir-inliner=full']
         else:
             is_wasm = backend == 'wasm'
             stdlib = f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
@@ -44,7 +44,7 @@ class KotlinCompiler(BaseCompiler):
                     '-ir-output-dir', input_name,
                     '-ir-output-name', 'src',
                     '-libraries', stdlib,
-                    '-nowarn']
+                    '-nowarn', '-Xklib-ir-inliner=full']
 
     def get_filename(self, match):
         return match[0]
