@@ -1122,6 +1122,7 @@ class Generator():
         assert self.inline_call_graph.add_edge(source, target)
 
     ## CHECKERS FROM EXTENDING GENERATION CAPABILITIES ##
+    #TODO: Lambdas must be considered separately, they have complex interactions with local context
     def _var_decls_allowed(self):
         """Whether new variable declarations may be created here.
 
