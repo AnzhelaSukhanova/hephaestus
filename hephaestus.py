@@ -590,6 +590,7 @@ def check_oracle(dirname, oracles):
             attach_time_metrics(pid, proc_res.stats, time_metrics)
             output[pid] = proc_res.stats
             continue
+        already_preserved = False
         for program, oracle in proc_res.stats['programs'].items():
             if oracle and program in failed:
                 # Here the program should be compiled successfully. However,
@@ -612,6 +613,7 @@ def check_oracle(dirname, oracles):
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
                 phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
+                already_preserved = True
                 preserve_final_program_dir(pid)
                 maybe_run_live_jacoco(pid, phase_changes)
                 if stop:
@@ -632,9 +634,10 @@ def check_oracle(dirname, oracles):
                     _report_failed(pid, cli_args.transformations, compiler,
                                    oracle)
                 phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
+                already_preserved = True
                 preserve_final_program_dir(pid)
                 maybe_run_live_jacoco(pid, phase_changes)
-        if cli_args.keep_everything:
+        if cli_args.keep_everything and not already_preserved:
             phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
             preserve_final_program_dir(pid)
             maybe_run_live_jacoco(pid, phase_changes)
