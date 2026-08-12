@@ -1603,6 +1603,215 @@ def test_gate_and_record_agree_on_the_default_value_node():
                                                    body_node(foo))
 
 
+# ---------------------------------------------------------------------------
+# Frontend recursion shapes not caught by identity-only check
+# ---------------------------------------------------------------------------
+
+def test_stored_callable_reference_without_call_rejects_recursion():
+    """
+    Kotlin reproducer (StoredCallableReferenceOnly.kt):
+    ```kotlin
+    @file:Suppress("NOTHING_TO_INLINE")
+
+    inline fun storedReferenceOnly() {
+        val ref = ::storedReferenceOnly
+    }
+
+    fun main() {
+        storedReferenceOnly()
+    }
+    ```
+
+    Backend verdict:
+        jvm:    error: inline function 'fun storedReferenceOnly(): Unit' cannot be recursive.
+        native: error: inline function 'fun storedReferenceOnly(): Unit' cannot be recursive.
+        js:     error: inline function 'fun storedReferenceOnly(): Unit' cannot be recursive.
+        wasm:   error: inline function 'fun storedReferenceOnly(): Unit' cannot be recursive.
+    """
+    generator = make_generator()
+    caller = make_function("storedReferenceOnly", is_inline=True)
+    # In real generation the reference can resolve to a distinct declaration
+    # (e.g., an override or a function selected through a different path)
+    # even though it denotes the same logical function.
+    callee = make_function("storedReferenceOnly", is_inline=True)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(caller)):
+        assert not generator._inline_edge_allowed(callee)
+
+
+def test_instance_call_on_this_rejects_recursion():
+    """
+    Kotlin reproducer (InstanceCallOnThis.kt):
+    ```kotlin
+    @file:Suppress("NOTHING_TO_INLINE")
+
+    class C {
+        inline fun foo(): Int {
+            return this.foo()
+        }
+    }
+
+    fun main() {
+        C().foo()
+    }
+    ```
+
+    Backend verdict:
+        jvm:    error: inline function 'fun foo(): Int' cannot be recursive.
+        native: error: inline function 'fun foo(): Int' cannot be recursive.
+        js:     error: inline function 'fun foo(): Int' cannot be recursive.
+        wasm:   error: inline function 'fun foo(): Int' cannot be recursive.
+    """
+    generator = make_generator()
+    caller = make_function("foo", is_inline=True)
+    # The callee selected for this.foo() can be a different declaration object
+    # (e.g., a base-class method or an override) even though it is the same
+    # logical function.
+    callee = make_function("foo", is_inline=True)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(caller)):
+        assert not generator._inline_edge_allowed(callee)
+
+
+def test_instance_call_on_expression_rejects_recursion():
+    """
+    Kotlin reproducer (InstanceCallOnExpression.kt):
+    ```kotlin
+    @file:Suppress("NOTHING_TO_INLINE")
+
+    class C {
+        inline fun foo(): Int {
+            val other: C = this
+            return other.foo()
+        }
+    }
+
+    fun main() {
+        C().foo()
+    }
+    ```
+
+    Backend verdict:
+        jvm:    error: inline function 'fun foo(): Int' cannot be recursive.
+        native: error: inline function 'fun foo(): Int' cannot be recursive.
+        js:     error: inline function 'fun foo(): Int' cannot be recursive.
+        wasm:   error: inline function 'fun foo(): Int' cannot be recursive.
+    """
+    generator = make_generator()
+    caller = make_function("foo", is_inline=True)
+    callee = make_function("foo", is_inline=True)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(caller)):
+        assert not generator._inline_edge_allowed(callee)
+
+
+def test_instance_call_on_new_instance_rejects_recursion():
+    """
+    Kotlin reproducer (InstanceCallOnNewInstance.kt):
+    ```kotlin
+    @file:Suppress("NOTHING_TO_INLINE")
+
+    class C {
+        inline fun foo(): Int {
+            return C().foo()
+        }
+    }
+
+    fun main() {
+        C().foo()
+    }
+    ```
+
+    Backend verdict:
+        jvm:    error: inline function 'fun foo(): Int' cannot be recursive.
+        native: error: inline function 'fun foo(): Int' cannot be recursive.
+        js:     error: inline function 'fun foo(): Int' cannot be recursive.
+        wasm:   error: inline function 'fun foo(): Int' cannot be recursive.
+    """
+    generator = make_generator()
+    caller = make_function("foo", is_inline=True)
+    callee = make_function("foo", is_inline=True)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(caller)):
+        assert not generator._inline_edge_allowed(callee)
+
+
+def test_instance_call_on_cast_receiver_rejects_recursion():
+    """
+    Kotlin reproducer (InstanceCallOnCastReceiver.kt):
+    ```kotlin
+    @file:Suppress("NOTHING_TO_INLINE")
+
+    class C {
+        inline fun foo(): Int {
+            return (TODO() as C).foo()
+        }
+    }
+
+    fun main() {
+        C().foo()
+    }
+    ```
+
+    Backend verdict:
+        jvm:    error: inline function 'fun foo(): Int' cannot be recursive.
+        native: error: inline function 'fun foo(): Int' cannot be recursive.
+        js:     error: inline function 'fun foo(): Int' cannot be recursive.
+        wasm:   error: inline function 'fun foo(): Int' cannot be recursive.
+    """
+    generator = make_generator()
+    caller = make_function("foo", is_inline=True)
+    callee = make_function("foo", is_inline=True)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(caller)):
+        assert not generator._inline_edge_allowed(callee)
+
+
+def test_instance_call_on_field_access_rejects_recursion():
+    """
+    Kotlin reproducer (InstanceCallOnFieldAccess.kt):
+    ```kotlin
+    @file:Suppress("NOTHING_TO_INLINE")
+
+    class Box(val c: C)
+
+    class C {
+        inline fun foo(box: Box): Int {
+            return box.c.foo(box)
+        }
+    }
+
+    fun main() {
+        C().foo(Box(C()))
+    }
+    ```
+
+    Backend verdict:
+        jvm:    error: inline function 'fun foo(box: Box): Int' cannot be recursive.
+        native: error: inline function 'fun foo(box: Box): Int' cannot be recursive.
+        js:     error: inline function 'fun foo(box: Box): Int' cannot be recursive.
+        wasm:   error: inline function 'fun foo(box: Box): Int' cannot be recursive.
+    """
+    generator = make_generator()
+    caller = make_function("foo", is_inline=True)
+    callee = make_function("foo", is_inline=True)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(caller)):
+        assert not generator._inline_edge_allowed(callee)
+
+
+# ---------------------------------------------------------------------------
+# Escalation metrics: call_context_tail must read as it did before
+# InliningSource existed
+# ---------------------------------------------------------------------------
+
+
 def test_omitted_default_gate_is_per_parameter():
     """Each omitted default is its own CallNode, decided independently.
 
