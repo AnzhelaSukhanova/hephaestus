@@ -2890,7 +2890,8 @@ class Generator():
         for var in variables:
             if not self._call_site_visibility_allowed_by_public_api_inline_checkers(var):
                 continue
-            var_type = self._get_var_type_to_search(var.get_type())
+            original_var_type = var.get_type()
+            var_type = self._get_var_type_to_search(original_var_type)
             if not var_type:
                 continue
             if isinstance(getattr(var_type, 't_constructor', None),
@@ -2978,12 +2979,29 @@ class Generator():
                 if getattr(attr, 'type_parameters', None):
 
                     decls.append(gu.AttrReceiverInfo(
-                        ast.Variable(var.name), type_map_var,
+                        self._get_matching_object_receiver(
+                            var.name, original_var_type, var_type), type_map_var,
                         attr, fun_type_var_map))
                 else:
                     decls.append(gu.AttrReceiverInfo(
-                        ast.Variable(var.name), type_map_var, attr, None))
+                        self._get_matching_object_receiver(
+                            var.name, original_var_type, var_type),
+                        type_map_var, attr, None))
         return decls
+
+    def _get_matching_object_receiver(self, name, original_type, search_type):
+        """Return an object receiver with the member-search type in Kotlin.
+
+        A bounded type parameter is searched through its concrete bound, but
+        its variable expression otherwise keeps the type-parameter type.  A
+        Kotlin cast keeps the emitted receiver coherent with the declaration
+        selected from that bound.  Other translators cannot represent the
+        cast node and retain the historical receiver expression.
+        """
+        receiver = ast.Variable(name)
+        if self.language == 'kotlin' and original_type != search_type:
+            return ast.EnforceTypeViaCast(receiver, search_type)
+        return receiver
 
     def _get_matching_function_declarations(self,
                                             etype: tp.Type,
