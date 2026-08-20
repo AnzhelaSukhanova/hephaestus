@@ -61,6 +61,8 @@
       "public": 0.2
     },
     "reified_type_parameters": 0.7,
+    "receiver_ascribe_prob_interface_abstract": 0.8,
+    "receiver_ascribe_prob_open_regular": 0.5,
     "sam_coercion": 1.0,
     "top_level_declarations": {
       "class_declaration": 0.3333333333333333,

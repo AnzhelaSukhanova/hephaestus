@@ -25,6 +25,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum
 from typing import Tuple, List, Callable, Union
 
 from src import utils as ut
@@ -40,6 +41,15 @@ from src.ir.data_structures import IncrementalDAGTransitiveClosure
 from src.modules.logging import Logger, log
 
 from src.debug_tools import called_by_suffix, call_stack_tail
+
+
+class _ReceiverClassification(str, Enum):
+    NOT_RECEIVER = "NOT_RECEIVER"
+    EFFECTIVELY_FINAL = "EFFECTIVELY_FINAL"
+    CANT_DISPROVE_FINAL = "CANT_DISPROVE_FINAL"
+    OPEN_REGULAR = "OPEN_REGULAR"
+    INTERFACE_OR_ABSTRACT = "INTERFACE_OR_ABSTRACT"
+
 
 @dataclass(frozen=True)
 class CallContext(ABC):
@@ -1896,10 +1906,7 @@ class Generator():
                 # Here, we generate a function or a class containing a function
                 # whose return type is 'etype'.
                 type_fun = self._gen_matching_func(etype, not_void=True)
-            receiver = (
-                None if type_fun.receiver_t is None
-                else self.generate_expr(type_fun.receiver_t, only_leaves)
-            )
+            receiver = self._gen_fresh_receiver(type_fun, only_leaves)
             funcs.append(gu.AttrReceiverInfo(receiver, type_fun.receiver_inst,
                                              type_fun.attr_decl, type_fun.attr_inst))
         rand_func = ut.random.choice(funcs)
@@ -2577,6 +2584,72 @@ class Generator():
                     type_var_map = {}
                 return c, type_var_map
         return None
+
+    def _classify_receiver(self, receiver_t: tp.Type,
+                           callee: ast.FunctionDeclaration):
+        """Classify a fresh receiver for the inline cycle detection X dispatch interactions."""
+        if receiver_t is None:
+            return _ReceiverClassification.NOT_RECEIVER
+
+        if receiver_t.is_type_var():
+            assert False
+            # This is reached via alternative path, but actually closer to EFFECTIVELY_FINAL
+            return _ReceiverClassification.CANT_DISPROVE_FINAL
+
+        if callee.is_final:
+            return _ReceiverClassification.EFFECTIVELY_FINAL
+
+        class_info = self._get_class(receiver_t)
+        if class_info is not None:
+            class_decl, _ = class_info
+            if class_decl.is_regular() and class_decl.is_final:
+                return _ReceiverClassification.EFFECTIVELY_FINAL
+
+            if class_decl.is_regular():
+                return _ReceiverClassification.OPEN_REGULAR
+            return _ReceiverClassification.INTERFACE_OR_ABSTRACT
+
+        return _ReceiverClassification.CANT_DISPROVE_FINAL
+
+    def _gen_fresh_receiver(self, type_fun, only_leaves=False):
+        """Generate the receiver used by the fresh-callee fallback."""
+        receiver_t = type_fun.receiver_t
+        if self.language != 'kotlin':
+            return (
+                None if receiver_t is None
+                else self.generate_expr(receiver_t, only_leaves)
+            )
+
+        classification = self._classify_receiver(
+            receiver_t, type_fun.attr_decl)
+        if classification == _ReceiverClassification.NOT_RECEIVER:
+            return None
+
+        if classification == _ReceiverClassification.EFFECTIVELY_FINAL:
+            return self.generate_expr(receiver_t, only_leaves)
+
+        if classification in (
+                _ReceiverClassification.OPEN_REGULAR,
+                _ReceiverClassification.CANT_DISPROVE_FINAL):
+            probability = cfg.prob.receiver_ascribe_prob_open_regular
+        else:
+            assert classification == _ReceiverClassification.INTERFACE_OR_ABSTRACT
+            probability = cfg.prob.receiver_ascribe_prob_interface_abstract
+
+        enforce_explicit_type = ut.random.bool(probability)
+        if not enforce_explicit_type:
+            return self.generate_expr(receiver_t, only_leaves, subtype=False)
+
+        receiver = self.generate_expr(receiver_t, only_leaves, subtype=True)
+        if (
+                isinstance(receiver, ast.EnforceTypeViaCast) and
+                receiver.target_type == receiver_t
+        ) or (
+                isinstance(receiver, ast.BottomConstant) and
+                receiver.t == receiver_t
+        ):
+            return receiver
+        return ast.EnforceTypeViaCast(receiver, receiver_t)
 
     def _get_var_type_to_search(self, var_type: tp.Type) -> tp.TypeParameter:
         """Get the type that we want to search for.

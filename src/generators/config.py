@@ -132,6 +132,8 @@ class Probabilities:
     class_field_is_immutable: float # val / var (kotlin)
     override_also_adding_setter: float # override val (getter only), adding additional setter var
     class_type: ClassTypeProbabilities # regular / abstract / interface
+    receiver_ascribe_prob_open_regular: float # probability of enforcing hephaestus type in Kotlin vs restricted generation
+    receiver_ascribe_prob_interface_abstract: float # probability of enforcing hephaestus type in Kotlin vs restricted generation
     helper_functions: HelperFunctionProbabilities # functions created where we can't find existing function returning this type or with this signature
     top_level_declarations: TopLevelDeclarationProbabilities # top level class / func / variable
 
@@ -199,6 +201,8 @@ class GenConfig(metaclass=Singleton):
                 abstract=0.25,
                 interface=0.25
             ),
+            receiver_ascribe_prob_open_regular=0.5,
+            receiver_ascribe_prob_interface_abstract=0.8,
             helper_functions=HelperFunctionProbabilities(
                 is_global_method=0.5,
                 is_global_function=0.25,
