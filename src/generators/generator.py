@@ -1885,20 +1885,11 @@ class Generator():
         """
         log(self.logger, "Generating function call of type {}".format(etype))
         funcs = self._get_matching_function_declarations(etype, subtype)
-
-        rand_func = None
-        func = None
-        if funcs:
-            rand_func = ut.random.choice(funcs)
-            func = rand_func.attr_decl
         if not funcs:
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
-            type_fun = (
-                None if rand_func is not None
-                else self._get_matching_class(etype, subtype=subtype,
+            type_fun = self._get_matching_class(etype, subtype=subtype,
                                               attr_name='functions')
-            )
             if type_fun is None:
                 msg = "No compatible classes for type {}"
                 log(self.logger, msg.format(etype))
@@ -1911,8 +1902,8 @@ class Generator():
             )
             funcs.append(gu.AttrReceiverInfo(receiver, type_fun.receiver_inst,
                                              type_fun.attr_decl, type_fun.attr_inst))
-            rand_func = ut.random.choice(funcs)
-            func = rand_func.attr_decl
+        rand_func = ut.random.choice(funcs)
+        func = rand_func.attr_decl
         self._record_inline_edge(func)
         receiver = rand_func.receiver_expr
         params_map = rand_func.receiver_inst
