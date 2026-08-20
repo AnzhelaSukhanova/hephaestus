@@ -567,6 +567,19 @@ class KotlinTranslator(BaseTranslator):
                 ", ".join(children_res)))
 
     @append_to
+    def visit_enforce_type_via_cast(self, node):
+        old_ident = self.ident
+        self.ident = 0
+        node.expr.accept(self)
+        child_res = self.pop_children_res(node.children())
+        self.ident = old_ident
+        self._children_res.append(
+            "{}({} as {})".format(
+                " " * self.ident,
+                child_res[0],
+                self.get_type_name(node.target_type)))
+
+    @append_to
     def visit_field_access(self, node):
         old_ident = self.ident
         self.ident = 0

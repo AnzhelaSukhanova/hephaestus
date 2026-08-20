@@ -19,6 +19,7 @@ class ASTVisitor():
             ast.FunctionDeclaration: self.visit_func_decl,
             ast.Lambda: self.visit_lambda,
             ast.FunctionReference: self.visit_func_ref,
+            ast.EnforceTypeViaCast: self.visit_enforce_type_via_cast,
             ast.BottomConstant: self.visit_bottom_constant,
             ast.IntegerConstant: self.visit_integer_constant,
             ast.RealConstant: self.visit_real_constant,
@@ -82,6 +83,10 @@ class ASTVisitor():
 
     def visit_func_ref(self, node):
         raise NotImplementedError('visit_func_ref() must be implemented')
+
+    def visit_enforce_type_via_cast(self, node):
+        raise NotImplementedError(
+            'visit_enforce_type_via_cast() must be implemented')
 
     def visit_bottom_constant(self, node):
         raise NotImplementedError("visit_bottom_constant() must be implemented")
@@ -189,6 +194,9 @@ class DefaultVisitor(ASTVisitor):
     def visit_func_ref(self, node):
         return self._visit_node(node)
 
+    def visit_enforce_type_via_cast(self, node):
+        return self._visit_node(node)
+
     def visit_bottom_constant(self, node):
         return self._visit_node(node)
 
@@ -256,3 +264,6 @@ class DefaultVisitorUpdate(DefaultVisitor):
             new_children.append(c.accept(self))
         node.update_children(new_children)
         return node
+
+    def visit_enforce_type_via_cast(self, node):
+        return self._visit_node(node)

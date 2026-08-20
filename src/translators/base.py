@@ -15,3 +15,7 @@ class BaseTranslator(ASTVisitor):
 
     def get_type_name(self, t: tp.Type) -> str:
         raise NotImplementedError('get_type_name() must be implemented')
+
+    def visit_enforce_type_via_cast(self, node):
+        raise NotImplementedError(
+            'EnforceTypeViaCast is only supported by the Kotlin translator')

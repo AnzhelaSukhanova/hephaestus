@@ -31,6 +31,44 @@ class Expr(Node):
     pass
 
 
+class EnforceTypeViaCast(Expr):
+    """An expression whose static type is enforced by an explicit cast.
+
+    When we need a guarantee that a type of expression will be derived as
+    Hephaestus believes it to be, we need to cast to the Hephaestus type
+    explicitly inside Kotlin.
+
+    For now, used only for receiver dispatch coherence in Kotlin
+    (for inline cycles detection)
+    """
+
+    def __init__(self, expr: Expr, target_type: types.Type):
+        self.expr = expr
+        self.target_type = target_type
+
+    def children(self):
+        return [self.expr]
+
+    def update_children(self, children):
+        super().update_children(children)
+        self.expr = children[0]
+
+    def get_type(self):
+        return self.target_type
+
+    def is_bottom(self):
+        return self.expr.is_bottom()
+
+    def __str__(self):
+        return "EnforceTypeViaCast({}, {})".format(
+            self.expr, self.target_type)
+
+    def is_equal(self, other):
+        return (isinstance(other, EnforceTypeViaCast) and
+                self.target_type == other.target_type and
+                self.expr.is_equal(other.expr))
+
+
 class Program(Node):
     # Set default value to kotlin for backward compatibility
     def __init__(self, context, language):
