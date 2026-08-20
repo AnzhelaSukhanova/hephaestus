@@ -942,6 +942,9 @@ def get_type_hint(expr, context: ctx.Context, namespace: Tuple[str],
         if isinstance(expr, ast.BottomConstant):
             return _return_type_hint(expr.t)
 
+        if isinstance(expr, ast.EnforceTypeViaCast):
+            return _return_type_hint(expr.target_type)
+
         if isinstance(expr, ast.FunctionCall):
             if expr.receiver is None:
                 funcdecl = ctx.get_decl(context, namespace, expr.func)

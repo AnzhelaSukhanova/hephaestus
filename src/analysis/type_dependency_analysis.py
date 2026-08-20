@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from copy import deepcopy, copy
 from collections import defaultdict
 from typing import NamedTuple, Union, Dict, List
@@ -273,6 +274,25 @@ class TypeDependencyAnalysis(DefaultVisitor):
 
     def result(self):
         return self.type_graph
+
+    ### TYPE CONTEXT MANAGEMENT ###
+    @contextmanager
+    def _type_enforcement_scope(self, scope):
+        saved_stack = copy(self._stack)
+        saved_exp_type = self._exp_type
+        saved_exp_node_id = self._exp_node_id
+
+        # Do not let the child use the parent's expected type in the new synthetic scope
+        self._stack.append(scope)
+        self._exp_type = None
+        self._exp_node_id = None
+
+        try:
+            yield
+        finally:
+            self._stack = saved_stack
+            self._exp_type = saved_exp_type
+            self._exp_node_id = saved_exp_node_id
 
     def _get_node_id(self):
         top_stack = self._stack[-1]
@@ -678,6 +698,27 @@ class TypeDependencyAnalysis(DefaultVisitor):
             TypeNode(tu.get_type_hint(node, self._context, self._namespace,
                                       self._bt_factory, self._types), None)
         )
+
+    def visit_enforce_type_via_cast(self, node):
+        """Ensure child’s inferred type cannot replace the cast target.
+
+        The child will still contribute type dependencies, but its inferred type
+        will be overridden by cast
+
+        Example:
+            val x: Base = (makeDerived() as Base)
+            We might infer Derived from makeDerived(), but type of wrapper is Base
+        """
+        parent_node_id, nu = self._get_node_id()
+        # Create an isolated scope for dependencies belonging to the cast child.
+        scope = parent_node_id + ("/" + nu if nu else "") + \
+            "/__TYPE_ENFORCEMENT__"
+
+        with self._type_enforcement_scope(scope):
+            self.visit(node.expr)
+
+        self._inferred_nodes[parent_node_id].append(
+            TypeNode(node.target_type, None))
 
     def _handle_parameterized_func_call(self, fun_call, fun_decl,
                                         parent_id, node_id):
