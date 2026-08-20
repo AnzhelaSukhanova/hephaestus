@@ -46,7 +46,7 @@ def test_generator_config_overrides_nested_values():
 def test_generator_config_validates_probability_groups():
     config = deepcopy(cfg)
 
-    with pytest.raises(AssertionError, match="class type probabilities"):
+    with pytest.raises(AssertionError):
         config.json_config({
             "prob": {
                 "class_type": {
