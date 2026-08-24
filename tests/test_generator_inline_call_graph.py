@@ -4,7 +4,7 @@ from src.generators.generator import (
     ExprCallSite, FunctionBodyGeneration, DefaultValueGeneration, Generator,
     InliningSource, IrFunctionBodyStub
 )
-from src.ir import ast, kotlin_types as kt
+from src.ir import ast, kotlin_types as kt, types as tp
 from src.ir.context import Context
 from src.ir.data_structures import IncrementalDAGTransitiveClosure
 from src import utils as ut
@@ -727,6 +727,30 @@ Backend verdict:
         assert generator._current_inline_source() == (sink, 'x')
         # The omitted-arg default edge closes the cycle, so this must be rejected.
         assert not generator._inline_edge_allowed(g)
+
+
+def test_default_type_variable_forces_class_helper(monkeypatch):
+    generator = make_generator()
+    func = make_function("f", is_inline=False)
+    type_var = tp.TypeParameter("T")
+    marker = object()
+    calls = []
+
+    def matching_class(etype, attr_name, **kwargs):
+        calls.append((etype, attr_name, kwargs))
+        return marker
+
+    monkeypatch.setattr(generator, "_gen_matching_class", matching_class)
+    monkeypatch.setattr(ut.random, "bool", lambda prob=0.5: False)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=[DefaultValueGeneration(func, "x")]):
+        assert generator._gen_matching_func(type_var) is marker
+
+    assert calls == [(type_var, "functions", {
+        "signature": False,
+        "required_inline_call_source": None,
+    })]
 
 
 # ---------------------------------------------------------------------------
