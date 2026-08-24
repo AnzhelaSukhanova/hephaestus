@@ -70,7 +70,8 @@ class GenLimits:
     max_top_level: int # max number of top-level declarations
     min_top_level: int # min number of top-level declarations
     max_depth: int # max depth of leaves in programs
-    inline_default_depth: int # generation depth at the inline default
+    inline_default_depth: int # generation depth at the inlined default
+    ordinary_default_depth: int # generation depth at the ordinary (not inlined) default
 
 @dataclass
 class VisibilityProbabilities:
@@ -162,7 +163,8 @@ class GenConfig(metaclass=Singleton):
             max_top_level=10,
             min_top_level=5,
             max_depth=6,
-            inline_default_depth=0
+            inline_default_depth=2,
+            ordinary_default_depth=2
         )
         self.prob=Probabilities(
             function_expr=1.0,

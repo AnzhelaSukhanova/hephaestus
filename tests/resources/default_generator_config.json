@@ -12,7 +12,8 @@
       "max_params": 2,
       "max_side_effects": 1
     },
-    "inline_default_depth": 0,
+    "inline_default_depth": 2,
+    "ordinary_default_depth": 2,
     "max_depth": 6,
     "max_functional_params": 3,
     "max_top_level": 10,

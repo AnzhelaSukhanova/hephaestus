@@ -513,6 +513,9 @@ class Generator():
             self.declaration_namespace = self.namespace
             prev_namespace = self.namespace
             self.namespace = self.namespace[:-1]
+            functional_param_of_inline_func = func.is_inline and param.get_type().is_function_type()
+            # Can't become NOINLINE. Since params are generated before body.
+            param_will_be_inlined = functional_param_of_inline_func and param.inlining_scope in (ast.InliningScope.INLINE, ast.InliningScope.CROSSINLINE)
             with self.context.call_contexts(
                     subtree_pushed_call_context=[
                         DefaultValueGeneration(func, param.name), # impact whether _var_decls_allowed
@@ -524,9 +527,14 @@ class Generator():
                         )
                         else None,
                     ]):
-                with self._restricted_depth_generation(cfg.limits.inline_default_depth):
-                    expr = self.generate_expr(param.get_type(),
-                                              only_leaves=(cfg.limits.inline_default_depth == 0))
+                if param_will_be_inlined:
+                    with self._restricted_depth_generation(cfg.limits.inline_default_depth):
+                        expr = self._gen_func_ref_lambda(param.get_type(), only_leaves=(cfg.limits.inline_default_depth == 0))
+                        # Also anonymous functions are possible here, but we don't have machinery yet to make them
+                else:
+                    with self._restricted_depth_generation(cfg.limits.ordinary_default_depth):
+                        expr = self.generate_expr(param.get_type(),
+                                                  only_leaves=(cfg.limits.ordinary_default_depth == 0))
             self.namespace = prev_namespace
             self.declaration_namespace = prev_decl_namespace
             param.default = expr
