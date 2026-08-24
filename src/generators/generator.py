@@ -3150,6 +3150,22 @@ class Generator():
         # TODO: And with type params, we can generate global func and pass type
         if self._inside_inline_function and self.language == 'kotlin':
             gen_method = True
+        # We always need global wrapper classes, as they can capture type adequately
+        # and already (!) have logic to lift types
+        # fun <F_J> f(x: Box<F_J> = (...)() ) requires helper function f typed as f: () -> Box<F_J>
+        # But <F_J> is a local parameter, not avaliable in global scope
+        # So, type lifting logic creates a global class with (free) type parameter H
+        #
+        # class Helper<T> {
+        #   fun make(): Box<T> = TODO()
+        # }
+        #
+        # Making f<T=F_J>: () -> Box<H> still more rigid than just f<T=Box<F_J>>: () -> T
+        if (
+                self.context.has_call_context(DefaultValueGeneration) and
+                etype.has_type_variables()
+        ):
+            gen_method = True
         if not gen_method:
             # If the given type 'etype' is a type parameter, then the
             # function we want to generate should be in the current namespace,
