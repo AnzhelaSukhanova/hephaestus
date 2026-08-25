@@ -753,6 +753,65 @@ def test_default_type_variable_forces_class_helper(monkeypatch):
     })]
 
 
+def test_default_type_variable_helper_is_global_class(monkeypatch):
+    generator = make_generator()
+    func = make_function("f", is_inline=False)
+    generator.namespace = ast.GLOBAL_NAMESPACE + ("enclosing",)
+
+    monkeypatch.setattr(ut.random, "bool", lambda prob=0.5: False)
+    monkeypatch.setattr(
+        ut.random.r,
+        "choices",
+        lambda population, weights, **kwargs: [population[0]],
+    )
+    monkeypatch.setattr(
+        generator,
+        "_gen_func_body",
+        lambda ret_type, func=None: ast.BottomConstant(ret_type),
+    )
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=[DefaultValueGeneration(func, "x")]):
+        helper = generator._gen_matching_func(
+            tp.TypeParameter("T"), not_void=True
+        )
+
+    helper_namespace = generator.context.get_namespace(helper.attr_decl)
+    helper_class = generator.context.get_decl(
+        helper_namespace[:-1], helper_namespace[-1]
+    )
+    assert helper.attr_decl.is_class_method()
+    assert helper_namespace[:-1] == ast.GLOBAL_NAMESPACE
+    assert isinstance(helper_class, ast.ClassDeclaration)
+
+
+def test_default_type_independent_helper_is_global(monkeypatch):
+    generator = make_generator()
+    func = make_function("f", is_inline=False)
+    generator.namespace = ast.GLOBAL_NAMESPACE + ("enclosing",)
+
+    monkeypatch.setattr(ut.random, "bool", lambda prob=0.5: False)
+    monkeypatch.setattr(
+        ut.random.r,
+        "choices",
+        lambda population, weights, **kwargs: [population[0]],
+    )
+    monkeypatch.setattr(
+        generator,
+        "_gen_func_body",
+        lambda ret_type, func=None: ast.BottomConstant(ret_type),
+    )
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=[DefaultValueGeneration(func, "x")]):
+        helper = generator._gen_matching_func(
+            kt.Integer, not_void=True
+        ).attr_decl
+
+    assert generator.context.get_namespace(helper) == ast.GLOBAL_NAMESPACE
+    assert generator.namespace == ast.GLOBAL_NAMESPACE + ("enclosing",)
+
+
 # ---------------------------------------------------------------------------
 # False-negative detector: patterns the compiler ACCEPTS
 # ---------------------------------------------------------------------------
