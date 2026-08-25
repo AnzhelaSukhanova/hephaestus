@@ -3182,6 +3182,9 @@ class Generator():
                     cfg.prob.helper_functions.is_global_function if not etype.has_type_variables() else 0,
                 ]
             )[0]
+            # Defaults have no local namespace space to place helper functions
+            if self.context.has_call_context(DefaultValueGeneration):
+                self.namespace = ast.GLOBAL_NAMESPACE
             # Generate a function
             params = None
             if signature:
