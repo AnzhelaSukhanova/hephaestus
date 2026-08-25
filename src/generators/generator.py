@@ -62,7 +62,11 @@ class FunctionCallParamGeneration(CallContext):
 
 @dataclass(frozen=True)
 class FunctionBodyGeneration(CallContext):
-    callee: ast.FunctionDeclaration
+    callee: ast.FunctionDeclaration = None
+
+    @property
+    def is_inline(self):
+        return bool(self.callee and self.callee.is_inline)
 
 @dataclass(frozen=True)
 class ExprCallSite(CallContext):
@@ -1917,6 +1921,20 @@ class Generator():
             receiver = self._gen_fresh_receiver(type_fun, only_leaves)
             funcs.append(gu.AttrReceiverInfo(receiver, type_fun.receiver_inst,
                                              type_fun.attr_decl, type_fun.attr_inst))
+
+        in_inline_body = getattr(
+            self.context.current_call_context(FunctionBodyGeneration),
+            "is_inline",
+            False,
+        )
+        if in_inline_body:
+            inline_funcs = list(filter(
+                lambda candidate: candidate.attr_decl.is_inline,
+                funcs
+            ))
+            if inline_funcs and ut.random.bool(cfg.prob.inline_chains):
+                funcs = inline_funcs
+
         rand_func = ut.random.choice(funcs)
         func = rand_func.attr_decl
         self._record_inline_edge(func)

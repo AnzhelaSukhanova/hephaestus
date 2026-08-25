@@ -124,6 +124,7 @@ class Probabilities:
     reified_type_parameters: float
     func_ref_call: float # use function reference call instead of function call
     func_ref: float # generate func_ref instead of lambda
+    inline_chains: float # prefer inline callees while generating inline bodies
     sam_coercion: float # perform sam coercion whenever possible
     function_visibility: VisibilityProbabilities
     property_visibility: VisibilityProbabilities
@@ -173,6 +174,7 @@ class GenConfig(metaclass=Singleton):
             reified_type_parameters=0.7,
             func_ref_call=1.0,
             func_ref=0.5,
+            inline_chains=0.0,
             sam_coercion=1.0,
             function_visibility=VisibilityProbabilities(
                 public=0.2,

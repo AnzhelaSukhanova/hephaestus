@@ -43,6 +43,7 @@
     },
     "func_ref": 0.5,
     "func_ref_call": 1.0,
+    "inline_chains": 0.0,
     "function_expr": 1.0,
     "function_visibility": {
       "not_specified": 0.3,
