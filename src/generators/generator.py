@@ -1932,6 +1932,7 @@ class Generator():
         args = []
         initial_depth = self.depth
         self.depth += 1
+        named_arguments_started = False
         for param in func.params:
             expr_type = tp.substitute_type(param.get_type(), params_map)
             gen_bottom = expr_type.is_wildcard() or (
@@ -1955,6 +1956,7 @@ class Generator():
                         finally:
                             self.context.pop_call_context()
                         args.append(ast.CallArgument(arg, name=param.name))
+                    named_arguments_started = True # default omitted, or one named was already emitted
                 else:
                     self.context.push_call_context(FunctionCallParamGeneration(func, param))
                     try:
@@ -1962,7 +1964,7 @@ class Generator():
                                                  gen_bottom=gen_bottom)
                     finally:
                         self.context.pop_call_context()
-                    args.append(ast.CallArgument(arg))
+                    args.append(ast.CallArgument(arg, name= param.name if named_arguments_started else None))
 
             else:
                 # This param is a vararg, so provide a random number of
