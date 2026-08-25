@@ -6,6 +6,8 @@ from src.generators.generator import (
     ExprCallSite, FunctionBodyGeneration, DefaultValueGeneration, Generator,
     InliningSource, IrFunctionBodyStub
 )
+from src.generators import utils as gu
+from src.generators.config import cfg
 from src.ir import ast, kotlin_types as kt, types as tp
 from src.ir.context import Context
 from src.ir.data_structures import IncrementalDAGTransitiveClosure
@@ -812,6 +814,48 @@ def test_default_type_independent_helper_is_global(monkeypatch):
 
     assert generator.context.get_namespace(helper) == ast.GLOBAL_NAMESPACE
     assert generator.namespace == ast.GLOBAL_NAMESPACE + ("enclosing",)
+
+
+def test_inline_chain_preference_selects_inline_callee(monkeypatch):
+    generator = make_generator()
+    source = make_function("source", is_inline=True)
+    inline_callee = make_function("inlineCallee", is_inline=True)
+    ordinary_callee = make_function("ordinaryCallee", is_inline=False)
+    candidates = [
+        gu.AttrReceiverInfo(None, {}, ordinary_callee, None),
+        gu.AttrReceiverInfo(None, {}, inline_callee, None),
+    ]
+    generator.namespace = ast.GLOBAL_NAMESPACE + (source.name,)
+    monkeypatch.setattr(
+        generator, "_get_matching_function_declarations",
+        lambda etype, subtype: candidates,
+    )
+    monkeypatch.setattr(cfg.prob, "inline_chains", 1.0)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(source)):
+        call = generator._gen_func_call(kt.Integer, only_leaves=True)
+
+    assert call.func == inline_callee.name
+
+
+def test_inline_chain_preference_falls_back_to_ordinary_callee(monkeypatch):
+    generator = make_generator()
+    source = make_function("source", is_inline=True)
+    ordinary_callee = make_function("ordinaryCallee", is_inline=False)
+    candidates = [gu.AttrReceiverInfo(None, {}, ordinary_callee, None)]
+    generator.namespace = ast.GLOBAL_NAMESPACE + (source.name,)
+    monkeypatch.setattr(
+        generator, "_get_matching_function_declarations",
+        lambda etype, subtype: candidates,
+    )
+    monkeypatch.setattr(cfg.prob, "inline_chains", 1.0)
+
+    with generator.context.call_contexts(
+            subtree_pushed_call_context=body_ctx(source)):
+        call = generator._gen_func_call(kt.Integer, only_leaves=True)
+
+    assert call.func == ordinary_callee.name
 
 
 @pytest.mark.skip(reason="Known limitation: vararg arguments ignore the named-argument boundary")
