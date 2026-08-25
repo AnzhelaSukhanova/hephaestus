@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from src.generators.generator import (
     ExprCallSite, FunctionBodyGeneration, DefaultValueGeneration, Generator,
     InliningSource, IrFunctionBodyStub
@@ -810,6 +812,32 @@ def test_default_type_independent_helper_is_global(monkeypatch):
 
     assert generator.context.get_namespace(helper) == ast.GLOBAL_NAMESPACE
     assert generator.namespace == ast.GLOBAL_NAMESPACE + ("enclosing",)
+
+
+@pytest.mark.skip(reason="Known limitation: vararg arguments ignore the named-argument boundary")
+def test_vararg_after_omitted_default_is_named(monkeypatch):
+    generator = make_generator()
+    func = make_function("target", is_inline=False)
+    func.params = [
+        ast.ParameterDeclaration(
+            "first", kt.String, default=ast.StringConstant("default")
+        ),
+        ast.ParameterDeclaration("rest", kt.IntegerArray, vararg=True),
+    ]
+    generator.context.add_func(ast.GLOBAL_NAMESPACE, func.name, func)
+
+    monkeypatch.setattr(ut.random, "bool", lambda prob=0.5: False)
+    monkeypatch.setattr(ut.random, "integer", lambda min_int=0, max_int=10: 1)
+    monkeypatch.setattr(
+        generator,
+        "generate_expr",
+        lambda expr_type, only_leaves=False, subtype=True, **kwargs:
+        ast.IntegerConstant(1, kt.Integer),
+    )
+
+    call = generator._gen_func_call(kt.Integer, only_leaves=True)
+
+    assert [argument.name for argument in call.args] == ["rest"]
 
 
 # ---------------------------------------------------------------------------
