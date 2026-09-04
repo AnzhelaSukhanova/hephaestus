@@ -203,6 +203,28 @@ class Context():
             ast.VariableDeclaration: self.remove_var,
         }
         decl_types[decl.__class__](ast.GLOBAL_NAMESPACE, decl.name)
+    def _drop_unreachable_global_declarations_from_lookup(self):
+        """Remove entry points to global declarations that fail to
+         cross cross-module boundary. Their namespaces still survive
+         but lack entry points for access
+        """
+        global_entities = self._context[ast.GLOBAL_NAMESPACE]
+
+        unreachable = [
+            decl for decl in global_entities["decls"].values()
+            if not decl.can_cross_module_boundary()
+        ]
+        for decl in unreachable:
+            self.remove_declaration(decl)
+
+    def _drop_global_declarations_from_translation(self):
+        """Hide global declarations from translation without dropping lookups.
+        Lookup for names and type resolution is still left
+        """
+        global_entities = self._context[ast.GLOBAL_NAMESPACE]
+
+        global_entities["decls"] = OrderedDict()
+
     def add_type(self, namespace, type_name, t):
         self._add_entity(namespace, 'types', type_name, t)
 
