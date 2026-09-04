@@ -9,6 +9,7 @@ from src import utils
 from src.ir import BUILTIN_FACTORIES
 from src.ir.builtins import BuiltinFactory, FunctionType
 from src.ir.node import Node
+from enum import Enum, auto
 
 
 GLOBAL_NAMESPACE = ('global',)
@@ -94,6 +95,14 @@ class Program(Node):
         return self.context.get_declarations(GLOBAL_NAMESPACE,
                                              only_current=True)
 
+    def get_exported_names(self):
+        """The top-level names another module may use."""
+        return [
+            str(name)
+            for name, decl in self.get_declarations().items()
+            if decl.can_cross_module_boundary()
+        ]
+
     def get_types(self):
         usr_types = [d for d in self.declarations
                      if isinstance(d, ClassDeclaration)]
@@ -143,6 +152,12 @@ class Block(Node):
             return check_list_eq(self.body, other.body)
         return False
 
+class CanCrossModuleBoundary(Enum):
+    UNKNOWN = auto()
+    ALWAYS = auto()
+    AS_FRIEND_MODULE = auto()
+    NEVER = auto()
+
 @dataclass(frozen=True)
 class Visibility:
     """
@@ -155,6 +170,7 @@ class Visibility:
     """
     name: str
     is_public_api: bool
+    cross_module_boundary: CanCrossModuleBoundary
     _resolve: "Callable[[Visibility, VisibilityResolutionContext | None], Visibility] | None" = None
 
     def resolve(
@@ -164,6 +180,17 @@ class Visibility:
         if self._resolve is None:
             return self
         return self._resolve(self, context)
+
+    def can_cross_module_boundary(self,
+                                  as_friend_module = False,
+                                  context: "VisibilityResolutionContext | None" = None) -> bool:
+        resolved_ability = self.resolve(context).cross_module_boundary
+        if resolved_ability is CanCrossModuleBoundary.ALWAYS:
+            return True
+        elif as_friend_module and resolved_ability is CanCrossModuleBoundary.AS_FRIEND_MODULE:
+            return True
+        else:
+            return False
 
 # TODO: Support inheritance if support of INTERNAL, PROTECTED is added
 @dataclass(frozen=True)
@@ -198,19 +225,24 @@ class Visibilities:
 
     Used in Kotlin (K1) Legacy: :attr:`Visibilities.Inherited`, :attr:`Visibilities.PrivateToThis`
     """
-    PRIVATE = Visibility("private", False)
-    INTERNAL = Visibility("internal", False)
-    PROTECTED = Visibility("protected", True)
-    PUBLIC = Visibility("public", True)
+    PRIVATE = Visibility("private", False, CanCrossModuleBoundary.NEVER)
+    INTERNAL = Visibility("internal", False, CanCrossModuleBoundary.AS_FRIEND_MODULE)
+    PROTECTED = Visibility("protected", True, CanCrossModuleBoundary.ALWAYS)
+    PUBLIC = Visibility("public", True, CanCrossModuleBoundary.ALWAYS)
 
     # TODO: Support inheritance if support of INTERNAL, PROTECTED is added
     UNKNOWN = Visibility("unknown",
                          False,
+                         CanCrossModuleBoundary.UNKNOWN,
                          _resolve=resolve_unknown_visibility)
 
 class Declaration(Node):
     def get_type(self):
         raise NotImplementedError('get_type() must be implemented')
+
+    def can_cross_module_boundary(self, as_friend_module=False):
+        visibility = getattr(self, 'visibility', None)
+        return visibility is None or visibility.can_cross_module_boundary(as_friend_module=as_friend_module)
 
     def __repr__(self):
         if hasattr(self, 'name'):
@@ -381,7 +413,6 @@ class CallArgument(Node):
         return False
 
 # For now, "InliningScope" (similarly to func.is_inline ) is generated for every param in every language
-from enum import Enum, auto
 class InliningScope(Enum):
     DEFAULT = auto() # Is not a param of inline function, or a non-functional param of inline function (so adding modifiers produces compile error)
     INLINE = auto()
