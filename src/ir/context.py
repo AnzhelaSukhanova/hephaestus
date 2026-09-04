@@ -141,6 +141,49 @@ class Context():
             self._context[namespace][entity][name] = value
         self._namespaces[value] = namespace
 
+    def _add_function(self, namespace, func):
+        self.add_func(namespace, func.name, func)
+        namespace = namespace + (func.name,)
+        for param in func.params:
+            self.add_var(namespace, param.name, param)
+        if not func.body or not isinstance(func.body, ast.Block):
+            return
+        stack = list(func.body.body)
+        while stack:
+            statement = stack.pop()
+            if isinstance(statement, ast.VariableDeclaration):
+                self.add_var(namespace, statement.name, statement)
+
+            if isinstance(statement, ast.FunctionDeclaration):
+                self._add_function(namespace, statement)
+
+            if isinstance(statement, ast.Conditional):
+                stack.append(statement.true_branch)
+                stack.append(statement.false_branch)
+
+            if isinstance(statement, ast.Block):
+                stack.extend(statement.body)
+
+    def _add_class(self, namespace, class_decl):
+        namespace = namespace + (class_decl.name,)
+        for field in class_decl.fields:
+            self.add_var(namespace, field.name, field)
+        for function in class_decl.functions:
+            self._add_function(namespace, function)
+
+    def add_declaration(self, decl):
+        decl_types = {
+            ast.FunctionDeclaration: self.add_func,
+            ast.ClassDeclaration: self.add_class,
+            ast.VariableDeclaration: self.add_var,
+        }
+        decl_types[decl.__class__](ast.GLOBAL_NAMESPACE, decl.name, decl)
+        if isinstance(decl, ast.ClassDeclaration):
+            self._add_class(ast.GLOBAL_NAMESPACE, decl)
+
+        if isinstance(decl, ast.FunctionDeclaration):
+            self._add_function(ast.GLOBAL_NAMESPACE, decl)
+
     def _remove_entity(self, namespace, entity, name):
         if namespace not in self._context:
             return
@@ -150,6 +193,13 @@ class Context():
                 del self._namespaces[decl]
             del self._context[namespace][entity][name]
 
+    def remove_declaration(self, decl):
+        decl_types = {
+            ast.FunctionDeclaration: self.remove_func,
+            ast.ClassDeclaration: self.remove_class,
+            ast.VariableDeclaration: self.remove_var,
+        }
+        decl_types[decl.__class__](ast.GLOBAL_NAMESPACE, decl.name)
     def add_type(self, namespace, type_name, t):
         self._add_entity(namespace, 'types', type_name, t)
 
