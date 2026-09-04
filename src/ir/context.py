@@ -8,6 +8,9 @@ from src.ir.data_structures import StackWithCounter
 class Context():
 
     def __init__(self):
+        # _context and _namespaces are tied together
+        # _context[namespace] : declarations in scope
+        # _namespaces[decl] : scope with a given declaration
         self._context = {}
         # A lookup from declarations to namespaces
         self._namespaces = {}
