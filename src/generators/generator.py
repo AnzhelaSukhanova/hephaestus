@@ -108,14 +108,24 @@ class InliningSource(CallContext):
         return (self.func, self.location)
 
 class Generator():
-    # TODO document
     def __init__(self,
                  language=None,
                  options={},
-                 logger=None):
+                 logger=None,
+                 target_module=None):
+        """
+        Makes a generator object.
+
+        :param language: Kotlin / Java / Groovy / Scala
+        :param options: Configuration options (e.g., should we do metrics collection).
+        :param logger: Attached logger object
+        :param target_module: Module we're currently generating (for cross-module regime), e.g. `src.d2` is a module with klib `2.klib`.
+        :param direct_imports: Symbols from the dependecies ({"src.d1.foo", "src.d1.Box"})
+        """
         assert language is not None, "You must specify the language"
         self.language = language
         self.logger: Logger = logger
+        self.target_module = target_module
         self.context: Context = None
         self.bt_factory: BuiltinFactory = BUILTIN_FACTORIES[language]
         self.depth = 1
@@ -169,6 +179,7 @@ class Generator():
         and then it generates the main function.
         """
         self.context = context or Context()
+        self.context.target_module = self.target_module
         self.inline_call_graph = IncrementalDAGTransitiveClosure()
         for _ in ut.random.range(cfg.limits.min_top_level,
                                  cfg.limits.max_top_level):
@@ -176,6 +187,14 @@ class Generator():
         self.generate_main_func()
         return ast.Program(self.context, self.language)
 
+    def _gen_name(self, ident_type=None, for_param=False, name=None):
+        """Generate a name, making qualified global names for this module
+        when they can be used by different module"""
+        name = gu.gen_identifier(ident_type) if name is None else name
+        if for_param or self.namespace != ast.GLOBAL_NAMESPACE or not self.target_module:
+            return name
+        prefix = self.target_module + '.'
+        return name if name.startswith(prefix) else prefix + name
     def gen_top_level_declaration(self):
         """Generate a top-level declaration and add it in the context.
 
@@ -213,7 +232,7 @@ class Generator():
         initial_depth = self.depth
         self.depth += 1
         main_func = ast.FunctionDeclaration(
-            "main",
+            self._gen_name(name="main"),
             params=[],
             ret_type=self.bt_factory.get_void_type(),
             body=None,
@@ -322,7 +341,7 @@ class Generator():
         Returns:
             A function declaration node.
         """
-        func_name = func_name or gu.gen_identifier('lower')
+        func_name = self._gen_name('lower', name=func_name)
 
         initial_namespace = self.namespace
         if namespace:
@@ -550,7 +569,7 @@ class Generator():
         Args:
             etype: Parameter type.
         """
-        name = gu.gen_identifier('lower')
+        name = self._gen_name('lower', for_param=True)
         if etype and etype.is_wildcard():
             bound = etype.get_bound_rec()
             param_type = bound or self.select_type(exclude_covariants=True)
@@ -587,7 +606,7 @@ class Generator():
         Returns:
             A class declaration node.
         """
-        class_name = class_name or gu.gen_identifier('capitalize')
+        class_name = self._gen_name('capitalize', name=class_name)
         initial_namespace = self.namespace
         self.namespace += (class_name,)
         initial_depth = self.depth
@@ -1015,7 +1034,7 @@ class Generator():
             declared_as_override: Whether the field is declared as an override.
             visibility: Explicily declared visibility.
         """
-        name = gu.gen_identifier('lower')
+        name = self._gen_name('lower')
 
         if visibility is None:
             visibility = ut.random.r.choices(
@@ -1080,7 +1099,7 @@ class Generator():
         vtype = var_type.get_bound_rec() if var_type.is_wildcard() else \
             var_type
         var_decl = ast.VariableDeclaration(
-            gu.gen_identifier('lower'),
+            self._gen_name('lower'),
             expr=expr,
             is_final=is_final,
             var_type=vtype,
@@ -3463,23 +3482,24 @@ class Generator():
             declaration (field or function).
         """
 
-        class_name = gu.gen_identifier('capitalize')
-        type_params = None
-
-        # Get return type, type_var_map, and flag for wildcards
-        if etype.has_type_variables():
-            # We have to create a class that has an attribute whose type
-            # is a type parameter. The only way to achieve this is to create
-            # a parameterized class, and pass the type parameter 'etype'
-            # as a type argument to the corresponding type constructor.
-            with self._isolated_generation(starting_namespace=ast.GLOBAL_NAMESPACE + (class_name,)):
-                type_params, type_var_map, can_wildcard = \
-                    self._create_type_params_from_etype(etype)
-                etype2 = tp.substitute_type(etype, type_var_map)
-        else:
-            type_var_map, etype2, can_wildcard = {}, etype, False
-
         with self._isolated_generation():
+            class_name = self._gen_name('capitalize')
+            type_params = None
+
+            # Get return type, type_var_map, and flag for wildcards
+            if etype.has_type_variables():
+                # We have to create a class that has an attribute whose type
+                # is a type parameter. The only way to achieve this is to create
+                # a parameterized class, and pass the type parameter 'etype'
+                # as a type argument to the corresponding type constructor.
+                with self._isolated_generation(
+                        starting_namespace=ast.GLOBAL_NAMESPACE + (class_name,)):
+                    type_params, type_var_map, can_wildcard = \
+                        self._create_type_params_from_etype(etype)
+                    etype2 = tp.substitute_type(etype, type_var_map)
+            else:
+                type_var_map, etype2, can_wildcard = {}, etype, False
+
             # Create class
             if attr_name == 'functions':
                 kwargs = {'fret_type': etype2} if not signature \

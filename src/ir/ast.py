@@ -91,6 +91,10 @@ class Program(Node):
         # Get declarations as list
         return self.get_declarations().values()
 
+    @property
+    def target_module(self):
+        return self.context.target_module
+
     def get_declarations(self):
         return self.context.get_declarations(GLOBAL_NAMESPACE,
                                              only_current=True)
