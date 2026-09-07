@@ -8,6 +8,8 @@ from src.ir.data_structures import StackWithCounter
 class Context():
 
     def __init__(self):
+        self._target_module = None
+
         # _context and _namespaces are tied together
         # _context[namespace] : declarations in scope
         # _namespaces[decl] : scope with a given declaration
@@ -26,6 +28,14 @@ class Context():
         self._persistent_call_stack = StackWithCounter()
         # Optimization on top of self._persistent_call_stack to get O(1) access to last call of each type
         self._typed_persistent_call_stacks = defaultdict(list)
+
+    @property
+    def target_module(self):
+        return getattr(self, '_target_module', None)
+
+    @target_module.setter
+    def target_module(self, module):
+        self._target_module = module
 
     # HELPERS TO WORK WITH ANY STACKED CONTEXT
     def _push_call_context(self, callcontext, call_stack, typed_call_stacks):
