@@ -161,8 +161,22 @@ class Context():
 
     def _add_declaration_entity(self, namespace, entity, name,
                                 value: ast.Declaration):
+        value.owner_module = self.target_module
         self._add_entity(namespace, entity, name, value)
         self._add_entity(namespace, 'decls', name, value)
+
+    def update_declarations(self, decls):
+        """Besides this update path, ``decls`` go through ``add_*``,
+        registering ``decl.owner_module`` in the process. For
+        explicit updates in ``Program.update_declarations``, we must
+        register them by hand.
+        """
+        for declaration in decls.values():
+            if (isinstance(declaration, ast.Declaration) and
+                    declaration.owner_module is None):
+                declaration.owner_module = self.target_module
+        self._context[ast.GLOBAL_NAMESPACE]['decls'] = decls
+
     def _add_function(self, namespace, func):
         self.add_func(namespace, func.name, func)
         namespace = namespace + (func.name,)

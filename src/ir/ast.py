@@ -119,7 +119,7 @@ class Program(Node):
         return new_types
 
     def update_declarations(self, decls):
-        self.context._context[GLOBAL_NAMESPACE]['decls'] = decls
+        self.context.update_declarations(decls)
 
     def add_declaration(self, decl):
         return self.context.add_declaration(decl)
@@ -241,6 +241,8 @@ class Visibilities:
                          _resolve=resolve_unknown_visibility)
 
 class Declaration(Node):
+    owner_module = None # set in Context._add_declaration_entity()
+
     def get_type(self):
         raise NotImplementedError('get_type() must be implemented')
 
