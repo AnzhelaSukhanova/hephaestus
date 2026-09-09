@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
+from typing import Union
 
 from src import utils
-from src.ir import ast
+from src.ir import ast, types
 from src.ir.data_structures import StackWithCounter
 
 class Context():
@@ -139,7 +142,9 @@ class Context():
                 assert self.pop_call_context() is expected
 
 
-    def _add_entity(self, namespace, entity, name, value):
+    def _add_entity(self, namespace, entity, name,
+                    value: Union[ast.Declaration, types.TypeParameter,
+                                 ast.Lambda]):
         if namespace in self._context:
             self._context[namespace][entity][name] = value
         else:
@@ -154,6 +159,10 @@ class Context():
             self._context[namespace][entity][name] = value
         self._namespaces[value] = namespace
 
+    def _add_declaration_entity(self, namespace, entity, name,
+                                value: ast.Declaration):
+        self._add_entity(namespace, entity, name, value)
+        self._add_entity(namespace, 'decls', name, value)
     def _add_function(self, namespace, func):
         self.add_func(namespace, func.name, func)
         namespace = namespace + (func.name,)
@@ -235,23 +244,24 @@ class Context():
 
         global_entities["decls"] = OrderedDict()
 
-    def add_type(self, namespace, type_name, t):
+    def add_type(self, namespace, type_name, t: types.TypeParameter):
         self._add_entity(namespace, 'types', type_name, t)
 
-    def add_func(self, namespace, func_name, func):
-        self._add_entity(namespace, 'funcs', func_name, func)
-        self._add_entity(namespace, 'decls', func_name, func)
+    def add_func(self, namespace, func_name,
+                 func: ast.FunctionDeclaration):
+        self._add_declaration_entity(namespace, 'funcs', func_name, func)
 
-    def add_lambda(self, namespace, shadow_name, lmd):
+    def add_lambda(self, namespace, shadow_name, lmd: ast.Lambda):
         self._add_entity(namespace, 'lambdas', shadow_name, lmd)
 
-    def add_var(self, namespace, var_name, var):
-        self._add_entity(namespace, 'vars', var_name, var)
-        self._add_entity(namespace, 'decls', var_name, var)
+    def add_var(self, namespace, var_name,
+                var: Union[ast.VariableDeclaration, ast.FieldDeclaration,
+                           ast.ParameterDeclaration]):
+        self._add_declaration_entity(namespace, 'vars', var_name, var)
 
-    def add_class(self, namespace, class_name, cls):
-        self._add_entity(namespace, 'classes', class_name, cls)
-        self._add_entity(namespace, 'decls', class_name, cls)
+    def add_class(self, namespace, class_name,
+                  cls: ast.ClassDeclaration):
+        self._add_declaration_entity(namespace, 'classes', class_name, cls)
 
     def remove_type(self, namespace, type_name):
         self._remove_entity(namespace, 'types', type_name)
