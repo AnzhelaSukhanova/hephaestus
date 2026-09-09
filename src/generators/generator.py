@@ -442,10 +442,7 @@ class Generator():
         if is_inline:
             self._inside_inline_function = True
 
-        if params is not None:
-            for p in params:
-                self._add_node_to_parent(self.namespace, p)
-        else:
+        if params is None:
             params = (
                 self._gen_func_params()
                 if (
