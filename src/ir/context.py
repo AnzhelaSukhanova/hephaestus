@@ -240,14 +240,6 @@ class Context():
         for decl in unreachable:
             self.remove_declaration(decl)
 
-    def _drop_global_declarations_from_translation(self):
-        """Hide global declarations from translation without dropping lookups.
-        Lookup for names and type resolution is still left
-        """
-        global_entities = self._context[ast.GLOBAL_NAMESPACE]
-
-        global_entities["decls"] = OrderedDict()
-
     def add_type(self, namespace, type_name, t: types.TypeParameter):
         self._add_entity(namespace, 'types', type_name, t)
 
