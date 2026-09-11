@@ -209,19 +209,19 @@ class Visibility:
     name: str
     is_public_api: bool
     cross_module_boundary: CanCrossModuleBoundary
-    _resolve: "Callable[[Visibility, VisibilityResolutionContext | None], Visibility] | None" = None
+    _resolve: Callable[[Visibility, VisibilityResolutionContext | None], Visibility] | None = None
 
     def resolve(
             self,
-            context: "VisibilityResolutionContext | None" = None,
-    ) -> "Visibility":
+            context: VisibilityResolutionContext | None = None,
+    ) -> Visibility:
         if self._resolve is None:
             return self
         return self._resolve(self, context)
 
     def can_cross_module_boundary(self,
                                   as_friend_module = False,
-                                  context: "VisibilityResolutionContext | None" = None) -> bool:
+                                  context: VisibilityResolutionContext | None = None) -> bool:
         resolved_ability = self.resolve(context).cross_module_boundary
         if resolved_ability is CanCrossModuleBoundary.ALWAYS:
             return True
