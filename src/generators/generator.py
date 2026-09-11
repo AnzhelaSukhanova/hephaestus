@@ -120,12 +120,12 @@ class Generator():
         :param options: Configuration options (e.g., should we do metrics collection).
         :param logger: Attached logger object
         :param target_module: Module we're currently generating (for cross-module regime), e.g. `src.d2` is a module with klib `2.klib`.
-        :param direct_imports: Symbols from the dependecies ({"src.d1.foo", "src.d1.Box"})
         """
         assert language is not None, "You must specify the language"
         self.language = language
         self.logger: Logger = logger
         self.target_module = target_module
+        self._direct_dependency_modules = frozenset()
         self.context: Context = None
         self.bt_factory: BuiltinFactory = BUILTIN_FACTORIES[language]
         self.depth = 1
@@ -179,6 +179,11 @@ class Generator():
         and then it generates the main function.
         """
         self.context = context or Context()
+        current_module = self.context.target_module
+        self._direct_dependency_modules = (
+            frozenset({current_module})
+            if current_module is not None else frozenset()
+        )
         self.context.target_module = self.target_module
         self.inline_call_graph = IncrementalDAGTransitiveClosure()
         for _ in ut.random.range(cfg.limits.min_top_level,
@@ -664,6 +669,8 @@ class Generator():
             if cls.name == current_cls:
                 return False
             if cls.name in self._blacklisted_classes:
+                return False
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(cls):
                 return False
             return not cls.is_final and (cls.is_interface()
                                          if only_interfaces else True)
@@ -1168,6 +1175,27 @@ class Generator():
         """
         return not self.context.has_call_context(DefaultValueGeneration)
 
+    ## CHECKERS FOR SUPPORTING CROSSMODULE ##
+
+    def _allowed_by_explicit_imports_only_in_generation_paths_checker(
+            self, decl: ast.Declaration) -> bool:
+        """Is this declaration directly imported vs obtained from transitive closure
+
+        Context always has full transitive closure, but since we want to test direct imports
+        we'll only use directly imported declarations for fresh code generation paths.
+        """
+        if self.target_module is None:
+            return True
+        name = str(decl.name)
+        module, separator, _ = name.rpartition('.')
+        if not separator:
+            return True
+        if (module != self.target_module and
+                module not in self._direct_dependency_modules):
+            return False
+        return self.context.get_decl(ast.GLOBAL_NAMESPACE, name) is decl
+
+
 
     # This function respects call sites, and when generate_expr tries to redo generation on failure, it doesn't add new ExprCallSites
     def generate_expr(self,
@@ -1338,6 +1366,9 @@ class Generator():
             if self._inside_java_lambda:
                 continue
 
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(var):
+                continue
+
             if not self._call_site_visibility_allowed_by_public_api_inline_checkers(var):
                 continue
 
@@ -1384,6 +1415,8 @@ class Generator():
         classes = []
         class_decls = self.context.get_classes(self.namespace).values()
         for c in class_decls:
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(c):
+                continue
             for field in c.fields:
                 if not field.is_immutable and field.visibility.resolve() != ast.Visibilities.PRIVATE:
                     classes.append((c, field))
@@ -1473,6 +1506,7 @@ class Generator():
         variables = [
             v for v in variables
             if self._call_site_visibility_allowed_by_public_api_inline_checkers(v)
+            and self._allowed_by_explicit_imports_only_in_generation_paths_checker(v)
         ]
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
@@ -1730,6 +1764,7 @@ class Generator():
             v
             for v in self.context.get_vars(self.namespace).values()
             if (
+                self._allowed_by_explicit_imports_only_in_generation_paths_checker(v) and
                 # We can smart cast local variables that are final, have
                 # explicit types, and are not overridable.
                 # Inline param is never here, as it is ast.ParameterDeclaration
@@ -2057,6 +2092,8 @@ class Generator():
                         v not in self.context.get_vars(self.namespace[:-1]).values())),
                 variables))
         for var in variables:
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(var):
+                continue
             var_type = var.get_type()
             if not getattr(var_type, 'is_function_type', lambda: False)():
                 continue
@@ -2222,6 +2259,8 @@ class Generator():
         subclasses = []
         for c in class_decls:
             if c.class_type != ast.ClassDeclaration.REGULAR:
+                continue
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(c):
                 continue
             if c.is_parameterized():
                 t_con = getattr(etype, 't_constructor', None)
@@ -2452,6 +2491,7 @@ class Generator():
         usr_types = [
             c.get_type()
             for c in self.context.get_classes(self.namespace).values()
+            if self._allowed_by_explicit_imports_only_in_generation_paths_checker(c)
         ]
         type_params = []
         if not exclude_type_vars:
@@ -2932,6 +2972,8 @@ class Generator():
                         v not in self.context.get_vars(self.namespace[:-1]).values())),
                 variables))
         for var in variables:
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(var):
+                continue
             if not self._call_site_visibility_allowed_by_public_api_inline_checkers(var):
                 continue
             original_var_type = var.get_type()
@@ -3080,6 +3122,9 @@ class Generator():
         for func in self.context.get_funcs(self.namespace).values():
             # The receiver object for this kind of functions is None.
             if func.get_type() == self.bt_factory.get_void_type():
+                continue
+
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(func):
                 continue
 
             if is_nested_function and func.name in self.namespace:
@@ -3430,6 +3475,8 @@ class Generator():
 
         class_decls = []
         for c in self.context.get_classes(self.namespace).values():
+            if not self._allowed_by_explicit_imports_only_in_generation_paths_checker(c):
+                continue
             for attr in self._get_class_attributes(c, attr_name):
                 if (
                         attr_name == 'functions' and
