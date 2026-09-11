@@ -24,7 +24,9 @@ def main():
     gen.depth = 2  # body is one level below the function
 
     # Find Destroyer.playpens
-    destroyer = next(d for d in program.declarations if d.name == "Destroyer")
+    declarations = program.context.get_declarations(
+        ast.GLOBAL_NAMESPACE, only_current=True).values()
+    destroyer = next(d for d in declarations if d.name == "Destroyer")
     playpens = next(fn for fn in destroyer.functions if fn.name == "playpens")
 
     print(f"Before regen: commences.inlining_scope = {playpens.params[0].inlining_scope.name}")

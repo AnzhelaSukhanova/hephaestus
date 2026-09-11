@@ -1,6 +1,8 @@
 # pylint: disable=dangerous-default-value
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import List, Set, Union, Callable
+from typing import Collection, Dict, List, Set, Union, Callable
 from copy import deepcopy
 
 import src.ir.type_utils as tu
@@ -77,9 +79,9 @@ class Program(Node):
         self.language = language
         self.bt_factory: BuiltinFactory = BUILTIN_FACTORIES[language]
 
-    def children(self):
-        return self.context.get_declarations(GLOBAL_NAMESPACE,
-                                             only_current=True).values()
+    def children(self) -> Collection[Declaration]:
+        # For translation and transformation
+        return self.get_current_module_declarations().values()
 
     def update_children(self, children):
         super().update_children(children)
@@ -87,28 +89,58 @@ class Program(Node):
             self.add_declaration(c)
 
     @property
-    def declarations(self):
-        # Get declarations as list
-        return self.get_declarations().values()
+    def _declarations(self) -> Collection[Declaration]:
+        """Unfiltered view into declarations"""
+        return self._get_all_declarations().values()
 
     @property
     def target_module(self):
         return self.context.target_module
 
-    def get_declarations(self):
-        return self.context.get_declarations(GLOBAL_NAMESPACE,
-                                             only_current=True)
+    def name_is_from_current_module(self, name: str) -> bool:
+        return name.rpartition('.')[0] == self.target_module
 
-    def get_exported_names(self):
+    def _get_all_declarations(self) -> Dict[str, Declaration]:
+        return self.context.get_declarations(
+            GLOBAL_NAMESPACE, only_current=True)
+
+    def get_current_module_declarations(self) -> Dict[str, Declaration]:
+        """Declarations defined in this module"""
+        declarations = self._get_all_declarations()
+        if not self.target_module:
+            return declarations
+        return {
+            name: decl for name, decl in declarations.items()
+            if self.name_is_from_current_module(name)
+        }
+
+    def get_foreign_module_declarations(self) -> Dict[str, Declaration]:
+        """Imported declarations from other modules"""
+        if not self.target_module:
+            return {}
+        return {
+            name: decl
+            for name, decl in self._get_all_declarations().items()
+            if not self.name_is_from_current_module(name)
+        }
+
+    def get_exported_names(self) -> List[str]:
         """The top-level names another module may use."""
         return [
             str(name)
-            for name, decl in self.get_declarations().items()
+            for name, decl in self.get_current_module_declarations().items()
             if decl.can_cross_module_boundary()
         ]
 
     def get_types(self):
-        usr_types = [d for d in self.declarations
+        # If local classes are supported, we need to populate types
+        # with nested imported classes.
+
+        # It also needs unfiltered access to declarations. Even though
+        # they are not emitted, transformations still use them
+        # as they rely on full knowledge of types.
+
+        usr_types = [d for d in self._declarations
                      if isinstance(d, ClassDeclaration)]
         ttypes = usr_types + self.bt_factory.get_non_nothing_types()
         new_types = []
@@ -118,8 +150,10 @@ class Program(Node):
             new_types.append(t)
         return new_types
 
-    def update_declarations(self, decls):
-        self.context.update_declarations(decls)
+    def update_declarations(self, new_this_module_declarations):
+        new_all_declarations = self.get_foreign_module_declarations()
+        new_all_declarations.update(new_this_module_declarations)
+        self.context.update_declarations(new_all_declarations)
 
     def add_declaration(self, decl):
         return self.context.add_declaration(decl)
@@ -241,8 +275,6 @@ class Visibilities:
                          _resolve=resolve_unknown_visibility)
 
 class Declaration(Node):
-    owner_module = None # set in Context._add_declaration_entity()
-
     def get_type(self):
         raise NotImplementedError('get_type() must be implemented')
 
