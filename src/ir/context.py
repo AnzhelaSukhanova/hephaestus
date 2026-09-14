@@ -410,8 +410,7 @@ def get_decl(context, namespace, decl_name: str, limit=None):
                 else utils.prefix_lst(limit, ns))
 
     while stop_cond(namespace):
-        decls = context.get_declarations(namespace, True)
-        decl = decls.get(decl_name)
+        decl = context.get_decl(namespace, decl_name)
         if decl:
             return namespace, decl
         namespace = namespace[:-1]
