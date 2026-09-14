@@ -192,6 +192,11 @@ class Generator():
         self.generate_main_func()
         return ast.Program(self.context, self.language)
 
+    @staticmethod
+    def _last_segment(name: str) -> str:
+        _, declaration = ut.split_qualified_name(name)
+        return declaration.rsplit('.', 1)[-1]
+
     def _gen_name(self, ident_type=None, for_param=False, name=None):
         """Generate a name, making qualified global names for this module
         when they can be used by different module"""
@@ -200,6 +205,7 @@ class Generator():
             return name
         prefix = self.target_module + '.'
         return name if name.startswith(prefix) else prefix + name
+
     def gen_top_level_declaration(self):
         """Generate a top-level declaration and add it in the context.
 
@@ -358,16 +364,16 @@ class Generator():
         # Check if this function we want to generate is a class method, by
         # checking the name of the outer namespace. If we are in class then
         # the outer namespace begins with capital letter.
-        class_method = self.namespace[-2][0].isupper()
+        class_method = self._last_segment(self.namespace[-2])[0].isupper()
         class_method = (False if len(self.namespace) < 2 else
-                        self.namespace[-2][0].isupper())
+                        self._last_segment(self.namespace[-2])[0].isupper())
         # Check if this function we want to generate is a nested functions.
         # To do so, we want to find if the function is directly inside the
         # namespace of another function.
         # This is adhoc Visibilities.Local from Kotlin
         nested_function = (len(self.namespace) > 1 and
                            self.namespace[-2] != 'global' and
-                           self.namespace[-2][0].islower())
+                           self._last_segment(self.namespace[-2])[0].islower())
 
         if visibility is None:
             if nested_function:
@@ -2322,6 +2328,12 @@ class Generator():
         for func in funcs:
             if func.attr_decl.name == self.namespace[-1]:
                 continue
+            name = str(func.attr_decl.name)
+            # Receivers can't be emitted as `::src.d1.name`
+            # only as `receiver::name` (in Kotlin)
+            if (func.receiver_expr is None and
+                    not self.context.name_is_local(name)):
+                continue
             ref = ast.FunctionReference(
                 func.attr_decl.name, func.receiver_expr, etype,
                 target_decl=func.attr_decl)
@@ -3111,7 +3123,7 @@ class Generator():
         functions = []
         is_nested_function = (
                 self.namespace != ast.GLOBAL_NAMESPACE and
-                self.namespace[-2].islower() and
+                self._last_segment(self.namespace[-2]).islower() and
                 self.namespace[-2] != 'global'
         )
         # First find all top-level functions or methods included

@@ -40,6 +40,16 @@ class Context():
     def target_module(self, module):
         self._target_module = module
 
+    def name_is_local(self, name: str) -> bool:
+        """Is ``name`` from this context's module"""
+        if not self.target_module:
+            return True
+        name = str(name)
+        if '.' not in name:
+            return True
+        module, _ = utils.split_qualified_name(name)
+        return module == self.target_module
+
     # HELPERS TO WORK WITH ANY STACKED CONTEXT
     def _push_call_context(self, callcontext, call_stack, typed_call_stacks):
         call_stack.append(callcontext)

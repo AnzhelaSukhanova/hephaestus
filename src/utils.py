@@ -4,6 +4,7 @@ import string
 import pickle
 import os
 import sys
+from typing import Optional
 
 
 class Singleton(type):
@@ -19,6 +20,21 @@ class Singleton(type):
 def prefix_lst(prefix, lst):
     return any(prefix == lst[:i]
                for i in range(1, len(prefix) + 1))
+
+
+def split_qualified_name(name: str) -> tuple[Optional[str], str]:
+    """Split a qualified name into module prefix and declaration suffix.
+
+    ``module, name = split_qualified_name(src.<module>.<name>)``
+
+    ``module -> src.<module>``
+
+    ``name -> <name>``
+    """
+    components = name.split('.', 2)
+    if len(components) < 3:
+        return None, name
+    return '.'.join(components[:2]), components[2]
 
 
 def is_number(string_var):

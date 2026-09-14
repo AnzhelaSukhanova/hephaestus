@@ -10,6 +10,7 @@ import src.ir.types as types
 from src import utils
 from src.ir import BUILTIN_FACTORIES
 from src.ir.builtins import BuiltinFactory, FunctionType
+from src.ir.context import Context
 from src.ir.node import Node
 from enum import Enum, auto
 
@@ -97,9 +98,6 @@ class Program(Node):
     def target_module(self):
         return self.context.target_module
 
-    def name_is_from_current_module(self, name: str) -> bool:
-        return name.rpartition('.')[0] == self.target_module
-
     def _get_all_declarations(self) -> Dict[str, Declaration]:
         return self.context.get_declarations(
             GLOBAL_NAMESPACE, only_current=True)
@@ -111,7 +109,7 @@ class Program(Node):
             return declarations
         return {
             name: decl for name, decl in declarations.items()
-            if self.name_is_from_current_module(name)
+            if self.context.name_is_local(name)
         }
 
     def get_foreign_module_declarations(self) -> Dict[str, Declaration]:
@@ -121,7 +119,7 @@ class Program(Node):
         return {
             name: decl
             for name, decl in self._get_all_declarations().items()
-            if not self.name_is_from_current_module(name)
+            if not self.context.name_is_local(name)
         }
 
     def get_exported_names(self) -> List[str]:
