@@ -10,7 +10,6 @@ import src.ir.types as types
 from src import utils
 from src.ir import BUILTIN_FACTORIES
 from src.ir.builtins import BuiltinFactory, FunctionType
-from src.ir.context import Context
 from src.ir.node import Node
 from enum import Enum, auto
 
