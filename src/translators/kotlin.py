@@ -1,4 +1,5 @@
 from src.ir import ast, kotlin_types as kt, types as tp, type_utils as tu
+from src import utils as ut
 from src.translators.base import BaseTranslator
 
 
@@ -39,6 +40,11 @@ class KotlinTranslator(BaseTranslator):
         self._cast_integers = False
         self._nodes_stack = [None]
         self.context = None
+
+    def _strip_own_prefix(self, name):
+        if self.context.name_is_local(name):
+            _, name = ut.split_qualified_name(name)
+        return name
 
     @staticmethod
     def get_filename():
@@ -168,7 +174,7 @@ class KotlinTranslator(BaseTranslator):
                           node.class_type != ast.ClassDeclaration.INTERFACE and
                           not is_sam) else "",
             p=class_prefix,
-            n=node.name,
+            n=self._strip_own_prefix(node.name),
             tps="<" + type_parameters_res + ">" if type_parameters_res else "",
             fields="(" + ", ".join(field_res) + ")" if field_res else "",
             s=": " + ", ".join(superclasses_res) if superclasses_res else "",
@@ -215,7 +221,7 @@ class KotlinTranslator(BaseTranslator):
             c.accept(self)
         children_res = self.pop_children_res(children)
         var_type = "val " if node.is_final else "var "
-        res = prefix + var_type + node.name
+        res = prefix + var_type + self._strip_own_prefix(node.name)
         if node.var_type is not None:
             res += ": " + self.get_type_name(node.var_type)
         res += " = " + children_res[0]
@@ -317,7 +323,8 @@ class KotlinTranslator(BaseTranslator):
         prefix += "" if node.body is not None else "abstract "
         type_params = (
             "<" + type_parameters_res + ">" if type_parameters_res else "")
-        res = prefix + "fun " + type_params + node.name + "(" + ", ".join(
+        res = prefix + "fun " + type_params + self._strip_own_prefix(
+            node.name) + "(" + ", ".join(
             param_res) + ")"
         if node.ret_type:
             res += ": " + self.get_type_name(node.ret_type)
@@ -611,10 +618,14 @@ class KotlinTranslator(BaseTranslator):
         # TODO handle lambdas
         receiver = children_res[0] if children_res else ""
         receiver += "::"
+        # It might be counterintuitive why we do checks both during
+        # AST generation (Generator._gen_func_ref()) and here
+        # but we simply strip ::src.<local_module>func to ::func
+        # As that's the alternative way to call it
         res = "{ident}{receiver}{name}".format(
             ident=" " * self.ident,
             receiver=receiver,
-            name=node.func
+            name=self._strip_own_prefix(node.func)
         )
         self._children_res.append(res)
 
