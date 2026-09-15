@@ -118,6 +118,9 @@ class TopLevelDeclarationProbabilities:
 # we will generate the specified expression based on the current program
 @dataclass
 class Probabilities:
+    crossmodule_probability: float # to generate multi-module program
+    max_module_chain_depth: int # modules per chain, the root included; 0 is unbounded
+    drop_indirect_deps_prob: float # drop an indirect klib from the compiler cli
     function_expr: float # functions that their body are expressions
     bounded_type_parameters: float
     parameterized_functions: float
@@ -168,6 +171,9 @@ class GenConfig(metaclass=Singleton):
             ordinary_default_depth=2
         )
         self.prob=Probabilities(
+            crossmodule_probability=0.5,
+            max_module_chain_depth=3,
+            drop_indirect_deps_prob=0.0,
             function_expr=1.0,
             bounded_type_parameters=0.5,
             parameterized_functions=0.3,

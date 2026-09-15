@@ -23,6 +23,9 @@
   },
   "prob": {
     "bounded_type_parameters": 0.5,
+    "crossmodule_probability": 0.5,
+    "max_module_chain_depth": 3,
+    "drop_indirect_deps_prob": 0.0,
     "class_declaration_modality": {
       "declaration_final": 0.5,
       "override_final": 0.5
