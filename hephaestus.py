@@ -26,6 +26,7 @@ from src.translators.kotlin import KotlinTranslator
 from src.translators.groovy import GroovyTranslator
 from src.translators.scala import ScalaTranslator
 from src.translators.java import JavaTranslator
+from src.modules.crossmodule import CrossModuleManager
 from src.modules.processor import ProgramProcessor
 from src.generators.config import cfg
 from src.tools.changes_from_ir_dumps import write_program_ir_changes
@@ -40,6 +41,8 @@ from src.tools.ir_coverage import (
 
 
 STOP_COND = False
+CROSSMODULE_MANAGER = None
+CROSSMODULE_MANAGER_PID = None
 TRANSLATORS = {
     'kotlin': KotlinTranslator,
     'groovy': GroovyTranslator,
@@ -192,6 +195,26 @@ def save_program(program, program_str, program_file):
     # Save the program
     utils.save_text(program_file, program_str)
     utils.dump_program(program_file + ".bin", program)
+
+
+def setup_crossmodule_manager(compiler_version):
+    global CROSSMODULE_MANAGER, CROSSMODULE_MANAGER_PID
+    process_id = os.getpid()
+    if CROSSMODULE_MANAGER_PID == process_id:
+        return CROSSMODULE_MANAGER
+    CROSSMODULE_MANAGER = CrossModuleManager(
+        test_directory=cli_args.test_directory,
+        config=cfg,
+        backend=cli_args.backend,
+        compiler_version=compiler_version,
+        read_manifest_depends=getattr(
+            COMPILERS[cli_args.language], 'read_manifest_depends',
+            lambda _: None),
+        random_source=utils.random,
+        load_program=utils.load_program,
+    )
+    CROSSMODULE_MANAGER_PID = process_id
+    return CROSSMODULE_MANAGER
 
 
 def _cleanup_program_tmp(pid):
@@ -609,10 +632,51 @@ def check_oracle(dirname, oracles):
     """
     filename = os.path.join(dirname, 'src')
     filter_patterns = utils.path2set(cli_args.error_filter_patterns)
-    compiler = COMPILERS[cli_args.language](filename, filter_patterns)
+    dependency_paths = []
+    friend_paths = []
+    for pid, proc_res in oracles.items():
+        # A per-node build runs from its own directory, so every library it
+        # is handed has to be addressed absolutely.
+        klibs = [os.path.abspath(klib)
+                 for klib in CROSSMODULE_MANAGER.dependency_klibs(
+                     proc_res)]
+        if not klibs:
+            continue
+        kept, dropped = CROSSMODULE_MANAGER.apply_drop_knob(klibs)
+        if dropped:
+            # Only a fault's stats reach faults.json, so annotating here
+            # attributes exactly the faults that were compiled this way.
+            proc_res.stats['dropped_indirect_deps'] = dropped
+        for path in kept:
+            if path not in dependency_paths:
+                dependency_paths.append(path)
+        # The direct dependency comes first, and it is the only friend.
+        if klibs[0] not in friend_paths:
+            friend_paths.append(klibs[0])
+
+    # Cross-module generation uses one program per invocation, so that every
+    # program is a module of its own with its own retained KLIB.
+    module_pid = None
+    if cfg.prob.crossmodule_probability:
+        module_pid, = oracles
+    module_name = None
+    compile_cwd = None
+    if module_pid is not None:
+        module_name = 'd' + str(module_pid)
+        compile_cwd = os.path.join(filename, module_name)
+        utils.mkdir(compile_cwd)
+
+    if cli_args.language == 'kotlin' and (dependency_paths or module_name):
+        compiler = COMPILERS[cli_args.language](
+            filename, filter_patterns, dependency_klibs=dependency_paths,
+            friend_klibs=friend_paths, module_name=module_name)
+    else:
+        compiler = COMPILERS[cli_args.language](filename, filter_patterns)
+
     command_args = compiler.get_compiler_cmd()
     # At this point, we run the compiler
-    (_, err), compilation_time = timed(run_command, command_args)
+    (_, err), compilation_time = timed(
+        run_command, command_args, cwd=compile_cwd)
     time_metrics = get_time_metrics(oracles, compilation_time)
     # TODO In case there is an error in the compiler output and none of the
     # programs match with regex to that error, it means that something bad
@@ -655,7 +719,8 @@ def check_oracle(dirname, oracles):
                 proc_res.stats['error'] = '\n'.join(failed[program])
                 if not cli_args.disable_metrics:
                     enrichment, phase_profiling = timed(
-                        enrich_error, compiler, err_file=program)
+                        enrich_error, compiler, err_file=program,
+                        cwd=compile_cwd)
                     proc_res.stats.update(enrichment)
                     if cli_args.time_metrics:
                         time_metrics[pid]["phase_profiling"] = phase_profiling
@@ -787,7 +852,10 @@ def run(compiler_version):
 
 def run_parallel(compiler_version):
 
-    pool = mp.Pool(cli_args.workers)
+    pool = mp.Pool(
+        cli_args.workers,
+        initializer=setup_crossmodule_manager,
+        initargs=(compiler_version,))
 
     def process_program(pid, dirname):
         try:
@@ -848,6 +916,7 @@ def main():
     _, compiler_version = run_command(
         COMPILERS[cli_args.language].get_compiler_version())
     compiler_version = compiler_version.strip()
+    setup_crossmodule_manager(compiler_version)
     setup_live_jacoco()
 
     if cli_args.debug or cli_args.workers is None:
