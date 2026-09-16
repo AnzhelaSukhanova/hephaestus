@@ -194,6 +194,11 @@ def save_program(program, program_str, program_file):
     utils.dump_program(program_file + ".bin", program)
 
 
+def _cleanup_program_tmp(pid):
+    shutil.rmtree(os.path.join(cli_args.test_directory, 'tmp', str(pid)),
+                  ignore_errors=True)
+
+
 def preserve_final_program_dir(pid):
     src_dir = os.path.join(cli_args.test_directory, 'tmp', str(pid))
     dst_dir = os.path.join(cli_args.test_directory, str(pid))
@@ -631,6 +636,8 @@ def check_oracle(dirname, oracles):
                 proc_res.stats['error'] = compiler.crash_msg
                 attach_time_metrics(pid, proc_res.stats, time_metrics)
                 output[pid] = proc_res.stats
+                if dependency is not None:
+                    _cleanup_program_tmp(pid)
         shutil.rmtree(dirname)
         return output, compilation_time, time_metrics, {}
 
@@ -691,8 +698,7 @@ def check_oracle(dirname, oracles):
             phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
             preserve_final_program_dir(pid)
             maybe_run_live_jacoco(pid, phase_changes)
-        shutil.rmtree(os.path.join(cli_args.test_directory, 'tmp',
-                                   str(pid)))
+        _cleanup_program_tmp(pid)
     # Clear the directory of programs.
     shutil.rmtree(dirname)
     return output, compilation_time, time_metrics, published
