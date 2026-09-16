@@ -100,10 +100,7 @@ def print_msg():
     sys.stdout.write(msg)
 
 
-def logging():
-    compiler = COMPILERS[cli_args.language]
-    _, compiler = run_command(compiler.get_compiler_version())
-    compiler = compiler.strip()
+def logging(compiler_version):
     print("{} {} ({})".format("stop_cond".ljust(21), cli_args.stop_cond,
                               (cli_args.seconds
                                if cli_args.stop_cond == "timeout"
@@ -115,7 +112,7 @@ def logging():
     print("{} {}".format("bugs".ljust(21), cli_args.bugs))
     print("{} {}".format("name".ljust(21), cli_args.name))
     print("{} {}".format("language".ljust(21), cli_args.language))
-    print("{} {}".format("compiler".ljust(21), compiler))
+    print("{} {}".format("compiler".ljust(21), compiler_version))
     utils.fprint("")
 
     if not cli_args.seconds and not cli_args.iterations:
@@ -131,9 +128,9 @@ def logging():
         dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
         out.write("{}; {}; {}; {}; {}\n".format(
             dt_string, cli_args.name, cli_args.bugs, cli_args.language,
-            compiler))
+            compiler_version))
 
-    STATS['Info']['compiler'] = compiler
+    STATS['Info']['compiler'] = compiler_version
 
 
 def run_command(arguments, get_stdout=True, cwd=None):
@@ -720,8 +717,8 @@ def check_oracle_mul(dirname, oracles):
         return {}, 0, {}, {}
 
 
-def _run(process_program, process_res):
-    logging()
+def _run(process_program, process_res, compiler_version):
+    logging(compiler_version)
     iteration = 1
     time_passed = 0
     start_time = time.perf_counter()
@@ -745,7 +742,7 @@ def _run(process_program, process_res):
             return
 
 
-def run():
+def run(compiler_version):
 
     def process_program(pid, dirname):
         return gen_program(pid, dirname)
@@ -772,7 +769,7 @@ def run():
         update_stats(res, batch, batch_time, batch_escalations)
 
     try:
-        _run(process_program, process_res)
+        _run(process_program, process_res, compiler_version)
     except KeyboardInterrupt:
         pass
     path = os.path.join(cli_args.test_directory, 'tmp')
@@ -782,7 +779,7 @@ def run():
     print("Total faults: " + str(STATS['totals']['failed']))
 
 
-def run_parallel():
+def run_parallel(compiler_version):
 
     pool = mp.Pool(cli_args.workers)
 
@@ -823,7 +820,7 @@ def run_parallel():
             STOP_COND = True
 
     try:
-        _run(process_program, process_res)
+        _run(process_program, process_res, compiler_version)
         pool.close()
         pool.join()
     except KeyboardInterrupt:
@@ -842,12 +839,15 @@ def run_parallel():
 def main():
     validate_args(cli_args)
     pre_process_args(cli_args)
+    _, compiler_version = run_command(
+        COMPILERS[cli_args.language].get_compiler_version())
+    compiler_version = compiler_version.strip()
     setup_live_jacoco()
 
     if cli_args.debug or cli_args.workers is None:
-        run()
+        run(compiler_version)
     else:
-        run_parallel()
+        run_parallel(compiler_version)
 
 
 if __name__ == "__main__":
