@@ -292,6 +292,31 @@ if args.disable_reified_type_parameters:
 def validate_args(args):
     # CHECK ARGUMENTS
 
+    #TODO: Since for crossmodule support, a lot of calls become qualified, emitting
+    # `package src.d<pid>_inc` doesn't make sense anymore as all objects are still internally named `src.d<pid>.f()`. We
+    # can make a modification to incorrect oracle to not name package differently, in order to keep qualified names the same
+    if (args.language == "kotlin" and
+            not args.only_correctness_preserving_transformations):
+        sys.exit("Error: Kotlin requires -P (for now)")
+
+    if cfg.prob.crossmodule_probability > 0:
+        if args.language != "kotlin":
+            sys.exit("Error: cross-module generation is supported only for Kotlin")
+        if not args.keep_all:
+            sys.exit("Error: cross-module generation requires --keep-all to accumulate .klib's")
+        if args.batch != 1:
+            sys.exit("Error: cross-module generation requires --batch 1, as batches compile same module")
+
+        #TODO: These can be threaded into crossmodule, although require a bit of compatibility layers
+        # can be done as [UP/U] commit after crossmodule support is stable
+        if args.replay:
+            sys.exit("Error: cross-module generation does not support --replay (for now)")
+        if args.rerun:
+            sys.exit("Error: cross-module generation does not support --rerun (for now)")
+        if args.dry_run:
+            sys.exit("Error: cross-module generation does not support --dry-run (for now)")
+
+
     if args.seconds and args.iterations:
         sys.exit("Error: you should only set --seconds or --iterations")
 
