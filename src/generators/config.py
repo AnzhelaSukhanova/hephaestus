@@ -151,6 +151,10 @@ class Disabled:
 
 
 class GenConfig(metaclass=Singleton):
+    limits: GenLimits
+    prob: Probabilities
+    dis: Disabled
+
     def __init__(self):
         self.limits = GenLimits(
             cls=ClassLimits(

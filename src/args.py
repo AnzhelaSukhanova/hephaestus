@@ -264,6 +264,9 @@ random.remove_reserved_words(args.language)
 
 # Set configurations
 
+if args.language != 'kotlin':
+    cfg.prob.crossmodule_probability = 0.0
+
 if args.generator_config:
     try:
         with open(args.generator_config) as config_file:
