@@ -11,7 +11,8 @@ from src.ir.data_structures import StackWithCounter
 class Context():
 
     def __init__(self):
-        self._target_module = None
+        # CROSSMODULE SUPPORT
+        self._target_module = None # klib for which this Context() is produced
 
         # _context and _namespaces are tied together
         # _context[namespace] : declarations in scope
@@ -236,6 +237,11 @@ class Context():
             ast.VariableDeclaration: self.remove_var,
         }
         decl_types[decl.__class__](ast.GLOBAL_NAMESPACE, decl.name)
+
+    def prepare_this_context_for_import(self):
+        """Prepare this completed context for use as an imported dependency"""
+        self._drop_unreachable_global_declarations_from_lookup()
+
     def _drop_unreachable_global_declarations_from_lookup(self):
         """Remove entry points to global declarations that fail to
          cross cross-module boundary. Their namespaces still survive
