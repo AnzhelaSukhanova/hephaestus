@@ -128,10 +128,12 @@ def logging():
     STATS['Info']['compiler'] = compiler
 
 
-def run_command(arguments, get_stdout=True):
+def run_command(arguments, get_stdout=True, cwd=None):
     """Run a command
     Args:
         A list with the arguments to execute. For example ['ls', 'foo']
+        cwd: the directory to run the command from.  The Kotlin compiler
+            resolves modules by unique name against its working directory,
     Returns:
         return status, stderr.
     """
@@ -149,7 +151,8 @@ def run_command(arguments, get_stdout=True):
             # FIXME the wildcard * maybe won't work in Windows
             arguments = ' '.join(arguments)
         cmd = sp.Popen(arguments, stdout=sp.PIPE,
-                       stderr=sp.STDOUT, shell=True, env=sys_env)
+                       stderr=sp.STDOUT, shell=True, env=sys_env,
+                       cwd=cwd)
         stdout, stderr = cmd.communicate()
     except sp.CalledProcessError as err:
         return False, err
@@ -510,11 +513,11 @@ def _report_failed(pid, tid, compiler, oracle):
         tid -= 1
 
 
-def enrich_error(compiler, err_file):
+def enrich_error(compiler, err_file, cwd=None):
     command_outputs = {}
 
     for name, command in compiler.get_error_enrichment_cmds(err_file).items():
-        _, output = run_command(command)
+        _, output = run_command(command, cwd=cwd)
         command_outputs[name] = output
 
     return compiler.analyze_error_enrichment_output(err_file, command_outputs)
