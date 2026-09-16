@@ -12,8 +12,9 @@ import subprocess as sp
 import shutil
 import time
 import traceback
-from collections import namedtuple, OrderedDict
+from collections import OrderedDict
 from pathlib import Path
+from typing import List, NamedTuple, Optional
 
 from src.args import args as cli_args, validate_args, pre_process_args
 from src import utils
@@ -26,6 +27,7 @@ from src.translators.groovy import GroovyTranslator
 from src.translators.scala import ScalaTranslator
 from src.translators.java import JavaTranslator
 from src.modules.processor import ProgramProcessor
+from src.generators.config import cfg
 from src.tools.changes_from_ir_dumps import write_program_ir_changes
 from src.tools.ir_coverage import (
     coverage_compile_cmd,
@@ -74,9 +76,15 @@ STATS = {
     "escalations": {},
     "time_metrics": {},
 }
+if cfg.prob.crossmodule_probability:
+    STATS["crossmodule"] = {}
 TEMPLATE_MSG = (u"Test Programs Passed {} / {} \u2714\t\t"
                 "Test Programs Failed {} / {} \u2718\r")
-ProgramRes = namedtuple("ProgramRes", ['failed', 'stats'])
+class ProgramRes(NamedTuple):
+    failed: bool
+    stats: dict
+    direct_dependency_pid: Optional[int] = None
+    dep_transitive_closure_klibs: Optional[List[str]] = None
 
 
 # ============= util functions =======================
@@ -305,8 +313,12 @@ def save_stats():
     if cli_args.time_metrics:
         with open(time_metrics_file, 'w') as out:
             json.dump(time_metrics, out, indent=2)
+    if cfg.prob.crossmodule_probability:
+        STATS.setdefault('crossmodule', {})
     with open(stats_file, 'w') as out:
         json.dump(STATS, out, indent=2)
+    if cfg.prob.crossmodule_probability:
+        CROSSMODULE_MANAGER.save_ledger(STATS['crossmodule'])
     STATS['faults'] = faults
     STATS['escalations'] = escalations
     STATS['time_metrics'] = time_metrics
@@ -324,7 +336,7 @@ def stop_condition(iteration, time_passed):
 
 
 def update_stats(res, batch, batch_time, escalations=None):
-    res, compilation_time, time_metrics = res
+    res, compilation_time, time_metrics, published = res
     failed = len(res)
     passed = batch - failed
     STATS['totals']['failed'] += failed
@@ -332,6 +344,20 @@ def update_stats(res, batch, batch_time, escalations=None):
     STATS["time"] += batch_time
     STATS["compilation_time"] += compilation_time
     STATS['faults'].update(res)
+    if cfg.prob.crossmodule_probability:
+        # The ledger is the graph's only source of truth, and it is written
+        # here, in the parent, through the atomic save_stats path.
+        ledger = STATS.setdefault('crossmodule', {})
+        for pid, record in (published or {}).items():
+            # The ledger holds the graph, and a manifest disagreement is a
+            # signal about it rather than part of it.
+            diff = record.pop('manifest_diff', None)
+            ledger[str(pid)] = record
+            if diff is not None:
+                STATS.setdefault('crossmodule_manifest_diff', {})[
+                    str(pid)] = diff
+                print('\nProgram {} records dependencies outside its '
+                      'closure: {}'.format(pid, diff['unexpected']))
     if not cli_args.disable_metrics:
         STATS['escalations'].update(escalations or {})
     STATS['time_metrics'].update(time_metrics or {})
@@ -359,7 +385,7 @@ def process_cp_transformations(pid, dirname, translator, proc,
             program_str = utils.translate_program(translator, program)
             save_program(
                 program,
-                utils.translate_program(translator, program),
+                program_str,
                 os.path.join(
                     get_transformations_dir(
                         pid, proc.current_transformation - 1),
@@ -408,7 +434,7 @@ def save_escalations(pid, escalations):
         json.dump(escalations, out, indent=2)
 
 
-def gen_program(pid, dirname, packages):
+def gen_program(pid, dirname):
     """
     This function is responsible processing an iteration.
 
@@ -416,15 +442,33 @@ def gen_program(pid, dirname, packages):
     transformations, and finally it saves the resulting program into the
     given directory.
 
-    The program belongs to the given packages.
+    The program belongs to a package derived from its pid.
     """
     utils.random.reset_word_pool()
-    translator = TRANSLATORS[cli_args.language]('src.' + packages[0],
+    package_name = 'd' + str(pid)
+    generation_package = 'src.' + package_name
+    dependency = None
+    if (cfg.prob.crossmodule_probability and
+            utils.random.bool(cfg.prob.crossmodule_probability)):
+        dependency = CROSSMODULE_MANAGER.prepare_dependency(pid)
+
+    direct_dependency_pid = dependency['pid'] if dependency else None
+    dep_transitive_closure_klibs = dependency['klibs'] if dependency else None
+    translator = TRANSLATORS[cli_args.language](generation_package,
                                                 cli_args.options['Translator'])
-    proc = ProgramProcessor(pid, cli_args)
+    # For Kotlin we reuse generation_package as module name we're making
+    # There's 1:1 correspondence between packages (exist for all programs) and modules (only in Kotlin)
+    proc = ProgramProcessor(
+        pid,
+        cli_args,
+        generation_package if cli_args.language == 'kotlin' else None,
+    )
     try:
         start_time_gen = time.process_time()
-        program, oracle = proc.get_program()
+        if dependency:
+            program, oracle = proc.get_program(pre_existing_context=dependency['context'])
+        else:
+            program, oracle = proc.get_program()
         if cli_args.examine:
             print("pp program.context._context (to print the context)")
             __import__('ipdb').set_trace()
@@ -436,7 +480,7 @@ def gen_program(pid, dirname, packages):
                 os.path.join(get_generator_dir(pid), translator.get_filename())
             )
         correct_program = process_cp_transformations(
-            pid, dirname, translator, proc, program, packages[0])
+            pid, dirname, translator, proc, program, package_name)
         if not cli_args.disable_metrics:
             save_escalations(pid, proc.escalations)
         stats = {
@@ -452,11 +496,14 @@ def gen_program(pid, dirname, packages):
             stats["escalations"] = proc.escalations
         if not cli_args.only_correctness_preserving_transformations:
             incorrect_program = process_ncp_transformations(
-                pid, dirname, translator, proc, program, packages[1])
+                pid, dirname, translator, proc, program,
+                package_name + '_incorrect')
             if incorrect_program:
                 stats['error'] = incorrect_program[1]
                 stats['programs'][incorrect_program[0]] = False
-        return ProgramRes(False, stats)
+        return ProgramRes(
+            False, stats, direct_dependency_pid,
+            dep_transitive_closure_klibs)
     except Exception as exc:
         # This means that we have programming error in transformations
         err = ''
@@ -473,16 +520,18 @@ def gen_program(pid, dirname, packages):
             'program': None,
             'time': 0
         }
-        return ProgramRes(True, stats)
+        return ProgramRes(
+            True, stats, direct_dependency_pid,
+            dep_transitive_closure_klibs)
 
 
-def gen_program_mul(pid, dirname, packages):
+def gen_program_mul(pid, dirname):
     global STOP_COND
     if STOP_COND:
         return
     try:
         utils.random.r.seed()
-        return gen_program(pid, dirname, packages)
+        return gen_program(pid, dirname)
     except KeyboardInterrupt:
         STOP_COND = True
 
@@ -578,6 +627,7 @@ def check_oracle(dirname, oracles):
             print('We found compiler crash')
         for pid, proc_res in oracles.items():
             if not proc_res.failed:
+                dependency = proc_res.direct_dependency_pid
                 phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
                 preserve_final_program_dir(pid)
                 maybe_run_live_jacoco(pid, phase_changes)
@@ -585,14 +635,14 @@ def check_oracle(dirname, oracles):
                 attach_time_metrics(pid, proc_res.stats, time_metrics)
                 output[pid] = proc_res.stats
         shutil.rmtree(dirname)
-        return output, compilation_time, time_metrics
+        return output, compilation_time, time_metrics, {}
 
     output = {}
+    published = {}
     for pid, proc_res in oracles.items():
         if proc_res.failed:
-            attach_time_metrics(pid, proc_res.stats, time_metrics)
-            output[pid] = proc_res.stats
             continue
+        dependency = proc_res.direct_dependency_pid
         already_preserved = False
         for program, oracle in proc_res.stats['programs'].items():
             if oracle and program in failed:
@@ -648,18 +698,18 @@ def check_oracle(dirname, oracles):
                                    str(pid)))
     # Clear the directory of programs.
     shutil.rmtree(dirname)
-    return output, compilation_time, time_metrics
+    return output, compilation_time, time_metrics, published
 
 
 def check_oracle_mul(dirname, oracles):
     global STOP_COND
     if STOP_COND:
-        return {}, 0, {}
+        return {}, 0, {}, {}
     try:
         return check_oracle(dirname, oracles)
     except KeyboardInterrupt:
         STOP_COND = True
-        return {}, 0, {}
+        return {}, 0, {}, {}
     except Exception as exc:
         if cli_args.print_stacktrace:
             err = str(traceback.format_exc())
@@ -667,7 +717,7 @@ def check_oracle_mul(dirname, oracles):
             err = str(exc)
         print('Internal error while checking the oracle')
         print(err)
-        return {}, 0, {}
+        return {}, 0, {}, {}
 
 
 def _run(process_program, process_res):
@@ -682,10 +732,9 @@ def _run(process_program, process_res):
             res = []
             batches = get_batches(iteration - 1)
             for i in range(batches):
-                packages = (utils.random.word(), utils.random.word())
                 dirname = os.path.join(tmpdir, 'src')
                 pid = iteration + i
-                r = process_program(pid, dirname, packages)
+                r = process_program(pid, dirname)
                 res.append(r)
 
             process_res(iteration, res, tmpdir, batches)
@@ -698,8 +747,8 @@ def _run(process_program, process_res):
 
 def run():
 
-    def process_program(pid, dirname, packages):
-        return gen_program(pid, dirname, packages)
+    def process_program(pid, dirname):
+        return gen_program(pid, dirname)
 
     def process_res(start_index, res, testdir, batch):
         oracles = OrderedDict()
@@ -716,7 +765,7 @@ def run():
                 if r.stats.get("escalations")
             }
         res = (
-            ({}, 0, {})
+            ({}, 0, {}, {})
             if cli_args.dry_run
             else check_oracle(testdir, oracles)
         )
@@ -737,10 +786,9 @@ def run_parallel():
 
     pool = mp.Pool(cli_args.workers)
 
-    def process_program(pid, dirname, packages):
+    def process_program(pid, dirname):
         try:
-            return pool.apply_async(gen_program_mul, args=(pid, dirname,
-                                                           packages))
+            return pool.apply_async(gen_program_mul, args=(pid, dirname))
         except KeyboardInterrupt:
             global STOP_COND
             STOP_COND = True
@@ -766,8 +814,9 @@ def run_parallel():
             for i, r in enumerate(results):
                 oracles[start_index + i] = r
             if cli_args.dry_run:
-                return update(({}, 0, {}))
-            pool.apply_async(check_oracle_mul, args=(testdir, oracles),
+                return update(({}, 0, {}, {}))
+            pool.apply_async(check_oracle_mul,
+                             args=(testdir, oracles),
                              callback=update)
         except KeyboardInterrupt:
             global STOP_COND
