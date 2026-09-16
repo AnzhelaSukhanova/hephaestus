@@ -318,7 +318,9 @@ class TypeDependencyAnalysis(DefaultVisitor):
         while targets:
             assert len(targets) == 1
             t = targets[0]
-            type_con_name, type_var = t.split('.')
+            # Type constructors may be package-qualified; the final segment
+            # remains the type-variable name.
+            type_con_name, type_var = t.rsplit('.', 1)
             if type_con_name == target_type_constructor:
                 type_var = t
                 break
