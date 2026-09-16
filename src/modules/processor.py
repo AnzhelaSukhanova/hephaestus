@@ -20,9 +20,10 @@ class ProgramProcessor():
         'TypeOverwriting': TypeOverwriting,
     }
 
-    def __init__(self, proc_id, args):
+    def __init__(self, proc_id, args, target_module=None):
         self.proc_id = proc_id
         self.args = args
+        self.target_module = target_module
         self.transformations = [
             ProgramProcessor.CP_TRANSFORMATIONS[t]
             for t in self.args.transformation_types
@@ -70,7 +71,7 @@ class ProgramProcessor():
             schedule.append(transformation)
         return schedule
 
-    def get_program(self):
+    def get_program(self, pre_existing_context=None):
         if self.args.replay:
             if self.args.debug:
                 print("\nLoading program: " + self.args.replay)
@@ -78,12 +79,12 @@ class ProgramProcessor():
             return load_program(self.args.replay), True
         else:
             # Generate a new program.
-            return self.generate_program()
+            return self.generate_program(pre_existing_context=pre_existing_context)
 
     def get_transformations(self):
         return self.transformation_schedule[:self.current_transformation]
 
-    def generate_program(self):
+    def generate_program(self, pre_existing_context=None):
         if self.args.debug:
             print("\nGenerating program: " + str(self.proc_id))
         if self.args.log:
@@ -95,8 +96,9 @@ class ProgramProcessor():
         generator = Generator(
             language=self.args.language,
             logger=logger,
-            options=self.args.options["Generator"])
-        program = generator.generate()
+            options=self.args.options["Generator"],
+            target_module=self.target_module)
+        program = generator.generate(context=pre_existing_context)
         self.escalations = generator.escalations
         return program, True
 
