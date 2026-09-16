@@ -58,16 +58,49 @@ class KotlinCompiler(BaseCompiler):
 
     def _get_compiler_cmd(self, input_name):
         if is_native:
-            return [compiler, input_name, '-produce', 'library', '-o', input_name,
-                        '-nowarn', '-Xklib-ir-inliner=full']
+            command = [compiler, input_name, '-produce', 'library',
+                       '-o', self.module_name or input_name,
+                       '-nowarn', '-Xklib-ir-inliner=full']
+            command.extend(self._native_dependency_flags())
+            return command
         else:
-            is_wasm = backend == 'wasm'
-            stdlib = f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
-            return [compiler, input_name,
-                    '-ir-output-dir', input_name,
-                    '-ir-output-name', 'src',
-                    '-libraries', stdlib,
-                    '-nowarn', '-Xklib-ir-inliner=full']
+            command = [compiler, input_name]
+            if self.module_name:
+                # The KLIB is written next to the sources of this node, so
+                # its name is the module's own name.
+                command.extend(['-Xir-produce-klib-file',
+                                '-ir-output-dir', '.',
+                                '-ir-output-name', self.module_name])
+            else:
+                command.extend(['-ir-output-dir', input_name,
+                                '-ir-output-name', 'src'])
+            command.extend(['-libraries', self._libraries_value(),
+                            '-nowarn', '-Xklib-ir-inliner=full'])
+            command.extend(self._js_dependency_flags())
+            return command
+
+    @staticmethod
+    def _stdlib():
+        is_wasm = backend == 'wasm'
+        return f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
+
+    def _libraries_value(self):
+        libraries = [self._stdlib()] + self.dependency_klibs
+        return os.pathsep.join(libraries)
+
+    def _native_dependency_flags(self):
+        flags = []
+        for klib in self.dependency_klibs:
+            flags.extend(['-library', klib])
+        if self.friend_klibs:
+            flags.extend(['-friend-modules',
+                          os.pathsep.join(self.friend_klibs)])
+        return flags
+
+    def _js_dependency_flags(self):
+        if not self.friend_klibs:
+            return []
+        return ['-Xfriend-modules', os.pathsep.join(self.friend_klibs)]
 
     def get_filename(self, match):
         return match[0]
