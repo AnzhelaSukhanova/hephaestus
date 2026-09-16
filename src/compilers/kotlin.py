@@ -102,6 +102,30 @@ class KotlinCompiler(BaseCompiler):
             return []
         return ['-Xfriend-modules', os.pathsep.join(self.friend_klibs)]
 
+    @staticmethod
+    def read_manifest_depends(klib_path):
+        """The user modules a KLIB records as its own dependencies.
+
+        ``stdlib`` is dropped: only user modules say anything about the
+        module graph this run built.
+        """
+        manifest = 'default/manifest'
+        try:
+            if os.path.isdir(klib_path):
+                with open(os.path.join(klib_path, manifest)) as source:
+                    text = source.read()
+            else:
+                with zipfile.ZipFile(klib_path) as archive:
+                    text = archive.read(manifest).decode()
+        except (OSError, KeyError, zipfile.BadZipFile):
+            return None
+        for line in text.splitlines():
+            if line.startswith('depends='):
+                return {module
+                        for module in line[len('depends='):].split()
+                        if module != 'stdlib'}
+        return set()
+
     def get_filename(self, match):
         return match[0]
 
