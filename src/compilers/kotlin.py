@@ -1,4 +1,6 @@
 import re
+import os
+import zipfile
 
 from src.compilers.base import BaseCompiler
 from src.args import args as cli_args
@@ -20,8 +22,29 @@ class KotlinCompiler(BaseCompiler):
     )
     IR_MODIFYING_INLINER_PHASES = 'LocalClassesInInlineLambdasLowering,PreSerializationPrivateFunctionInlining,OuterThisInInlineFunctionsSpecialAccessorLowering,SyntheticAccessorLowering,FunctionInlining,InlineFunctionSerializationPreProcessing,RedundantCastsRemoverLowering'
 
-    def __init__(self, input_name, filter_patterns=None):
+    def __init__(self, input_name, filter_patterns=None,
+                 dependency_klibs=None, friend_klibs=None, module_name=None):
         super().__init__(input_name, filter_patterns)
+        # The whole transitive closure becomes the library path, while only
+        # the direct dependencies are attached as a friend module.
+        self.dependency_klibs = self._as_paths(dependency_klibs)
+        self.friend_klibs = self._as_paths(friend_klibs)
+        # Unique name of produced KLIB, used to refer by consumers.
+        self.module_name = module_name
+
+    @staticmethod
+    def _as_paths(klibs):
+        if klibs is None:
+            return []
+        if isinstance(klibs, (str, os.PathLike)):
+            klibs = [klibs]
+        return [str(path) for path in klibs]
+
+    def get_klib_filename(self):
+        """KLIB file build leaves in its working directory."""
+        if not self.module_name:
+            return None
+        return self.module_name + '.klib'
 
     @classmethod
     def get_compiler_version(cls):
