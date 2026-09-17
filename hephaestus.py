@@ -615,6 +615,32 @@ def attach_time_metrics(pid, stats, time_metrics):
         stats["time_metrics"] = time_metrics[pid]
 
 
+def _build_crossmodule_provider(proc_res, filter_patterns, dependency_paths,
+                               friend_paths, module_name, compile_cwd):
+    """Build the correct source as an isolated provider KLIB."""
+    correct_program, = (
+        program
+        for program, oracle in proc_res.stats['programs'].items()
+        if oracle)
+    provider_compiler = COMPILERS[cli_args.language](
+        correct_program, filter_patterns,
+        dependency_klibs=dependency_paths,
+        friend_klibs=friend_paths,
+        module_name=module_name)
+    provider_command_args = provider_compiler.get_compiler_cmd()
+    provider_klib = os.path.join(
+        compile_cwd, provider_compiler.get_klib_filename())
+    if os.path.isdir(provider_klib):
+        shutil.rmtree(provider_klib)
+    elif os.path.exists(provider_klib):
+        os.remove(provider_klib)
+    (provider_status, _), compilation_time = timed(
+        run_command, provider_command_args, cwd=compile_cwd)
+    if provider_status:
+        return (provider_klib, provider_command_args), compilation_time
+    return None, compilation_time
+
+
 def check_oracle(dirname, oracles):
     """
     This function is responsible for checking the oracle of the generated
@@ -759,6 +785,38 @@ def check_oracle(dirname, oracles):
                 already_preserved = True
                 preserve_final_program_dir(pid)
                 maybe_run_live_jacoco(pid, phase_changes)
+        # For now only --batch 1 supported for crossmodule
+        if cfg.prob.crossmodule_probability:
+            assert module_pid == pid
+
+        if cfg.prob.crossmodule_probability and pid not in output:
+            provider, provider_compilation_time = _build_crossmodule_provider(
+                proc_res, filter_patterns, dependency_paths, friend_paths,
+                module_name, compile_cwd)
+            compilation_time += provider_compilation_time
+            if cli_args.time_metrics:
+                time_metrics[pid]["compilation_with_ir_dumps"] += \
+                    provider_compilation_time
+            provider_phase_changes = None
+            if provider is not None and cli_args.keep_everything:
+                provider_phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
+            # Artifacts land before the ledger advertises the program: the
+            # KLIB and the pickle are on disk by the time the parent merges
+            # the record returned below.
+            record = None
+            if provider is not None:
+                provider_klib, provider_command_args = provider
+                record = CROSSMODULE_MANAGER.publish_provider(
+                    pid,
+                    provider_klib,
+                    provider_command_args,
+                    dependency,
+                    proc_res.stats.get('dropped_indirect_deps'))
+            already_preserved = record is not None
+            if record is not None:
+                published[pid] = record
+            if already_preserved and cli_args.keep_everything:
+                maybe_run_live_jacoco(pid, provider_phase_changes)
         if cli_args.keep_everything and not already_preserved:
             phase_changes = preserve_ir_changes_to_tmp(dirname, pid)
             preserve_final_program_dir(pid)
