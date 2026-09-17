@@ -83,6 +83,9 @@ sys.argv = [
 ]
 
 import hephaestus
+manager = hephaestus.setup_crossmodule_manager("test compiler")
+assert manager is hephaestus.setup_crossmodule_manager("other compiler")
+assert manager.compiler_version == "test compiler"
 
 batch_dir = run_dir / "batch"
 src_dir = batch_dir / "src"
