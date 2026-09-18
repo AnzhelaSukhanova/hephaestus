@@ -1,4 +1,6 @@
 # pylint: disable=abstract-method, useless-super-delegation,too-many-ancestors
+from typing import List
+
 from src.ir.types import Builtin
 
 import src.ir.builtins as bt
@@ -6,61 +8,61 @@ import src.ir.types as tp
 
 
 class GroovyBuiltinFactory(bt.BuiltinFactory):
-    def get_language(self):
+    def get_language(self) -> str:
         return "groovy"
 
     def get_builtin(self):
         return GroovyBuiltin
 
-    def get_void_type(self):
+    def get_void_type(self) -> tp.Type:
         return VoidType()
 
-    def get_any_type(self):
+    def get_any_type(self) -> tp.Type:
         return ObjectType()
 
-    def get_number_type(self):
+    def get_number_type(self) -> tp.Type:
         return NumberType()
 
-    def get_integer_type(self):
+    def get_integer_type(self) -> tp.Type:
         return IntegerType(primitive=False)
 
-    def get_byte_type(self):
+    def get_byte_type(self) -> tp.Type:
         return ByteType(primitive=False)
 
-    def get_short_type(self):
+    def get_short_type(self) -> tp.Type:
         return ShortType(primitive=False)
 
-    def get_long_type(self):
+    def get_long_type(self) -> tp.Type:
         return LongType(primitive=False)
 
-    def get_float_type(self):
+    def get_float_type(self) -> tp.Type:
         return FloatType(primitive=False)
 
-    def get_double_type(self):
+    def get_double_type(self) -> tp.Type:
         return DoubleType(primitive=False)
 
-    def get_big_decimal_type(self):
+    def get_big_decimal_type(self) -> tp.Type:
         return BigDecimalType()
 
-    def get_boolean_type(self):
+    def get_boolean_type(self) -> tp.Type:
         return BooleanType(primitive=False)
 
-    def get_char_type(self):
+    def get_char_type(self) -> tp.Type:
         return CharType(primitive=False)
 
-    def get_string_type(self):
+    def get_string_type(self) -> tp.Type:
         return StringType()
 
-    def get_array_type(self):
+    def get_array_type(self) -> tp.TypeConstructor:
         return ArrayType()
 
-    def get_function_type(self, nr_parameters=0):
+    def get_function_type(self, nr_parameters: int = 0) -> tp.TypeConstructor:
         return FunctionType(nr_parameters)
 
-    def get_big_integer_type(self):
+    def get_big_integer_type(self) -> tp.Type:
         return BigIntegerType()
 
-    def get_primitive_types(self):
+    def get_primitive_types(self) -> List[tp.Type]:
         return [
             ByteType(primitive=True),
             ShortType(primitive=True),
@@ -72,10 +74,10 @@ class GroovyBuiltinFactory(bt.BuiltinFactory):
             BooleanType(primitive=True)
         ]
 
-    def get_non_nothing_types(self):
+    def get_non_nothing_types(self) -> List[tp.Type]:
         return super().get_non_nothing_types() + self.get_primitive_types()
 
-    def get_number_types(self):
+    def get_number_types(self) -> List[tp.Type]:
         return super().get_number_types() + self.get_primitive_types()[:-1]
 
 
