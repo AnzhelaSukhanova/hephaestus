@@ -2,7 +2,7 @@
 from __future__ import annotations
 from copy import deepcopy, copy
 from collections import defaultdict
-from typing import List, Dict, Set
+from typing import Callable, Dict, List, Optional, Set
 
 from src.ir.node import Node
 
@@ -12,29 +12,29 @@ class Variance(object):
     COVARIANT = 1
     CONTRAVARIANT = 2
 
-    def __init__(self, value):
+    def __init__(self, value: int):
         self.value = value
 
-    def variance_to_str(self):
+    def variance_to_str(self) -> str:
         if self.value == 1:
             return 'out'
         if self.value == 2:
             return 'in'
         return ''
 
-    def is_covariant(self):
+    def is_covariant(self) -> bool:
         return self.value == 1
 
-    def is_contravariant(self):
+    def is_contravariant(self) -> bool:
         return self.value == 2
 
-    def is_invariant(self):
+    def is_invariant(self) -> bool:
         return self.value == 0
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(str(self.value))
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.value)
 
     def __eq__(self, other):
@@ -50,23 +50,23 @@ Contravariant = Variance(Variance.CONTRAVARIANT)
 
 
 class Type(Node):
-    def __init__(self, name):
+    def __init__(self, name: str):
         self.name = name
-        self.supertypes = []
+        self.supertypes: List[Type] = []
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.name)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
-    def has_type_variables(self):
+    def has_type_variables(self) -> bool:
         raise NotImplementedError("You have to implement has_type_variables()")
 
-    def is_subtype(self, other: Type):
+    def is_subtype(self, other: Type) -> bool:
         raise NotImplementedError("You have to implement 'is_subtype()'")
 
-    def is_assignable(self, other: Type):
+    def is_assignable(self, other: Type) -> bool:
         """
         Checks of a value of the current type is assignable to 'other' type.
 
@@ -77,28 +77,28 @@ class Type(Node):
         """
         return self.is_subtype(other)
 
-    def is_primitive(self):
+    def is_primitive(self) -> bool:
         raise NotImplementedError("You have to implement 'is_primitive()'")
 
-    def is_type_var(self):
+    def is_type_var(self) -> bool:
         return False
 
-    def is_wildcard(self):
+    def is_wildcard(self) -> bool:
         return False
 
-    def is_parameterized(self):
+    def is_parameterized(self) -> bool:
         return False
 
-    def is_type_constructor(self):
+    def is_type_constructor(self) -> bool:
         return False
 
-    def is_function_type(self):
+    def is_function_type(self) -> bool:
         return False
 
-    def get_supertypes(self):
+    def get_supertypes(self) -> Set[Type]:
         """Return self and the transitive closure of the supertypes"""
-        stack = [self]
-        visited = {self}
+        stack: List[Type] = [self]
+        visited: Set[Type] = {self}
         while stack:
             source = stack.pop()
             for supertype in source.supertypes:
@@ -107,27 +107,27 @@ class Type(Node):
                     stack.append(supertype)
         return visited
 
-    def not_related(self, other: Type):
+    def not_related(self, other: Type) -> bool:
         return not(self.is_subtype(other) or other.is_subtype(self))
 
-    def get_name(self):
+    def get_name(self) -> str:
         return str(self.name)
 
 
 class AbstractType(Type):
-    def is_subtype(self, other):
+    def is_subtype(self, other: Type) -> bool:
         raise TypeError("You cannot call 'is_subtype()' in an AbstractType")
 
-    def get_supertypes(self):
+    def get_supertypes(self) -> Set[Type]:
         return super().get_supertypes()
 
-    def has_type_variables(self):
+    def has_type_variables(self) -> bool:
         return True
 
-    def not_related(self, other):
+    def not_related(self, other: Type) -> bool:
         raise TypeError("You cannot call 'not_related()' in an AbstractType")
 
-    def is_primitive(self):
+    def is_primitive(self) -> bool:
         return False
 
 
@@ -139,29 +139,29 @@ class Builtin(Type):
         super().__init__(name)
         self.supertypes = []
 
-    def has_type_variables(self):
+    def has_type_variables(self) -> bool:
         return False
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.name) + "(builtin)"
 
     def __eq__(self, other: Type):
         """Check if two Builtin objects are of the same Type"""
         return self.__class__ == other.__class__
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         """Hash based on the Type"""
         return hash(str(self.__class__))
 
     def is_subtype(self, other: Type) -> bool:
         return other == self or other in self.get_supertypes()
 
-    def get_builtin_type(self):
+    def get_builtin_type(self) -> int:
         raise NotImplementedError("You have to implement get_builtin_type")
 
 
 class Classifier(Type):
-    def is_primitive(self):
+    def is_primitive(self) -> bool:
         return False
 
 
@@ -175,7 +175,9 @@ class SimpleClassifier(Classifier):
     """https://kotlinlang.org/spec/type-system.html#simple-classifier-types
     """
 
-    def __init__(self, name: str, supertypes: List[Type] = None, check=False):
+    def __init__(self, name: str,
+                 supertypes: Optional[List[Type]] = None,
+                 check: bool = False):
         super().__init__(name)
         self.supertypes = supertypes if supertypes is not None else []
         if check:
@@ -232,28 +234,29 @@ class SimpleClassifier(Classifier):
 
 class TypeParameter(AbstractType):
 
-    def __init__(self, name: str, variance=None, bound: Type = None, reified: bool = False):
+    def __init__(self, name: str, variance: Optional[Variance] = None,
+                 bound: Optional[Type] = None, reified: bool = False):
         super().__init__(name)
-        self.variance = variance or Invariant
+        self.variance: Variance = variance or Invariant
         self.bound = bound
         self.reified = reified
 
-    def variance_to_string(self):
+    def variance_to_string(self) -> str:
         return self.variance.variance_to_str()
 
-    def is_covariant(self):
+    def is_covariant(self) -> bool:
         return self.variance.is_covariant()
 
-    def is_contravariant(self):
+    def is_contravariant(self) -> bool:
         return self.variance.is_contravariant()
 
-    def is_invariant(self):
+    def is_invariant(self) -> bool:
         return self.variance.is_invariant()
 
     def children(self):
         return []
 
-    def is_type_var(self):
+    def is_type_var(self) -> bool:
         return True
 
     def has_bound_of(self, other: Type) -> bool:
@@ -266,7 +269,7 @@ class TypeParameter(AbstractType):
             return other in bound.get_type_variables(None)
         return False
 
-    def get_bound_rec(self, factory):
+    def get_bound_rec(self, factory) -> Optional[Type]:
         """
         This function recursively gets the bound of the type parameter.
         """
@@ -284,7 +287,7 @@ class TypeParameter(AbstractType):
         # are out of scope in the context where we use this bound.
         return t.to_type_variable_free(factory)
 
-    def is_subtype(self, other):
+    def is_subtype(self, other: Type) -> bool:
         if not self.bound:
             return False
         return self.bound == other
@@ -310,12 +313,19 @@ class TypeParameter(AbstractType):
 
 
 class WildCardType(Type):
-    def __init__(self, bound=None, variance=Invariant):
+    def __init__(self, bound: Optional[Type] = None,
+                 variance: Variance = Invariant):
+        """
+        List<*>, List<out T>, List<in T>
+
+        :param bound: None for List<*>, T for List<out T>, List<in T>
+        :param variance: Invariant (default), Covariant <out T>, Contravariant <in T>
+        """
         super().__init__("*")
         self.bound = bound
-        self.variance = variance
+        self.variance: Variance = variance
 
-    def is_subtype(self, other):
+    def is_subtype(self, other: Type) -> bool:
         if isinstance(other, WildCardType):
             if other.bound is not None:
                 if self.variance.is_covariant() and (
@@ -338,7 +348,7 @@ class WildCardType(Type):
         else:
             return {}
 
-    def get_bound_rec(self):
+    def get_bound_rec(self) -> Optional[Type]:
         if not self.bound:
             return None
         t = self.bound
@@ -346,16 +356,16 @@ class WildCardType(Type):
             return t.get_bound_rec()
         return t
 
-    def is_wildcard(self):
+    def is_wildcard(self) -> bool:
         return True
 
-    def is_invariant(self):
+    def is_invariant(self) -> bool:
         return self.variance.is_invariant()
 
-    def is_covariant(self):
+    def is_covariant(self) -> bool:
         return self.variance.is_covariant()
 
-    def is_contravariant(self):
+    def is_contravariant(self) -> bool:
         return self.variance.is_contravariant()
 
     def __eq__(self, other):
@@ -376,9 +386,10 @@ class WildCardType(Type):
                 self.bound.get_name()
             )
 
-    def is_primitive(self):
+    def is_primitive(self) -> bool:
         return False
 
+TypeSubstitution = Dict[TypeParameter, Type]
 
 def _get_type_substitution(etype, type_map,
                            cond=lambda t: t.has_type_variables()):
@@ -399,9 +410,10 @@ def _get_type_substitution(etype, type_map,
     return t
 
 
-def substitute_type_args(etype, type_map,
-                         cond=lambda t: t.has_type_variables()):
-    assert etype.is_parameterized()
+def substitute_type_args(
+        etype: ParameterizedType, type_map: TypeSubstitution,
+        cond: Callable[[Type], bool] = lambda t: t.has_type_variables()
+) -> ParameterizedType:
     type_args = []
     for t_arg in etype.type_args:
         type_args.append(_get_type_substitution(t_arg, type_map, cond))
@@ -414,12 +426,14 @@ def substitute_type_args(etype, type_map,
     return ParameterizedType(type_con, type_args)
 
 
-def substitute_type(t, type_map):
+def substitute_type(t: Type, type_map: TypeSubstitution) -> Type:
     return _get_type_substitution(t, type_map, lambda t: False)
 
 
-def perform_type_substitution(etype, type_map,
-                              cond=lambda t: t.has_type_variables()):
+def perform_type_substitution(
+        etype: TypeConstructor, type_map: TypeSubstitution,
+        cond: Callable[[Type], bool] = lambda t: t.has_type_variables()
+) -> TypeConstructor:
     """
     This function performs the following substitution.
     Imagine that we have the following case.
@@ -459,7 +473,7 @@ def perform_type_substitution(etype, type_map,
 
 class TypeConstructor(AbstractType):
     def __init__(self, name: str, type_parameters: List[TypeParameter],
-                 supertypes: List[Type] = None):
+                 supertypes: Optional[List[Type]] = None):
         super().__init__(name)
         assert len(type_parameters) != 0, "type_parameters is empty"
         self.type_parameters = list(type_parameters)
@@ -481,12 +495,12 @@ class TypeConstructor(AbstractType):
         return hash(str(self.__class__) + str(self.name) + str(self.supertypes)
                     + str(self.type_parameters))
 
-    def is_type_constructor(self):
+    def is_type_constructor(self) -> bool:
         return True
 
-    def is_subtype(self, other: Type):
+    def is_subtype(self, other: Type) -> bool:
         supertypes = self.get_supertypes()
-        matched_supertype = None
+        matched_supertype: Optional[Type] = None
         for supertype in supertypes:
             if other == supertype:
                 matched_supertype = supertype
@@ -511,7 +525,7 @@ class TypeConstructor(AbstractType):
             matched_supertype.get_type_variable_assignments().values())
         return not bool(type_vars.intersection(self.type_parameters))
 
-    def new(self, type_args: List[Type]):
+    def new(self, type_args: List[Type]) -> ParameterizedType:
         type_map = {tp: type_args[i]
                     for i, tp in enumerate(self.type_parameters)}
         old_supertypes = self.supertypes
@@ -583,7 +597,7 @@ def _is_type_arg_contained(t: Type, other: Type,
 class ParameterizedType(SimpleClassifier):
     def __init__(self, t_constructor: TypeConstructor,
                  type_args: List[Type],
-                 can_infer_type_args=False):
+                 can_infer_type_args: bool = False):
         self.t_constructor = deepcopy(t_constructor)
         self.type_args = list(type_args)
         assert len(self.t_constructor.type_parameters) == len(type_args), \
@@ -595,22 +609,22 @@ class ParameterizedType(SimpleClassifier):
         # XXX revisit
         self.supertypes = copy(self.t_constructor.supertypes)
 
-    def is_parameterized(self):
+    def is_parameterized(self) -> bool:
         return True
 
-    def is_function_type(self):
+    def is_function_type(self) -> bool:
         return self.t_constructor.name.startswith('Function')
 
-    def get_type_variable_assignments(self):
+    def get_type_variable_assignments(self) -> TypeSubstitution:
         return {
             t_param: self.type_args[i]
             for i, t_param in enumerate(self.t_constructor.type_parameters)
         }
 
-    def has_type_variables(self):
+    def has_type_variables(self) -> bool:
         return any(t_arg.has_type_variables() for t_arg in self.type_args)
 
-    def has_wildcards(self):
+    def has_wildcards(self) -> bool:
         return any(
             t_arg.is_wildcard() or (
                 t_arg.is_parameterized() and t_arg.has_wildcards()
@@ -618,7 +632,9 @@ class ParameterizedType(SimpleClassifier):
             for t_arg in self.type_args
         )
 
-    def to_variance_free(self, type_var_map=None):
+    def to_variance_free(
+            self, type_var_map: Optional[TypeSubstitution] = None
+    ) -> ParameterizedType:
         type_args = []
         for i, t_arg in enumerate(self.type_args):
             if t_arg.is_wildcard() and t_arg.bound:
@@ -631,7 +647,7 @@ class ParameterizedType(SimpleClassifier):
             type_args.append(t)
         return self.t_constructor.new(type_args)
 
-    def to_type_variable_free(self, factory):
+    def to_type_variable_free(self, factory) -> ParameterizedType:
         # We translate a parameterized type that contains
         # type variables into a parameterized type that is
         # type variable free.
@@ -660,7 +676,9 @@ class ParameterizedType(SimpleClassifier):
                                                         factory))
         return self.t_constructor.new(type_args)
 
-    def get_type_variables(self, factory) -> Dict[TypeParameter, Set[Type]]:
+    def get_type_variables(
+            self, factory
+    ) -> Dict[TypeParameter, Set[Optional[Type]]]:
         # This function actually returns a dict of the enclosing type variables
         # along with the set of their bounds.
         type_vars = defaultdict(set)
@@ -677,11 +695,11 @@ class ParameterizedType(SimpleClassifier):
         return type_vars
 
     @property
-    def can_infer_type_args(self):
+    def can_infer_type_args(self) -> bool:
         return self._can_infer_type_args
 
     @can_infer_type_args.setter
-    def can_infer_type_args(self, value):
+    def can_infer_type_args(self, value: bool):
         if not isinstance(value, bool):
             raise TypeError("Must be bool")
         self._can_infer_type_args = value
@@ -696,15 +714,15 @@ class ParameterizedType(SimpleClassifier):
                 other.t_constructor.type_parameters and
                 self.type_args == other.type_args)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(str(self.name) + str(self.supertypes) + str(self.type_args)
                     + str(self.t_constructor.type_parameters))
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "{}<{}>".format(self.name,
                                ", ".join(map(str, self.type_args)))
 
-    def get_name(self):
+    def get_name(self) -> str:
         return "{}<{}>".format(self.name, ", ".join([t.get_name()
                                                      for t in self.type_args]))
 
@@ -720,7 +738,7 @@ class ParameterizedType(SimpleClassifier):
                 return True
         return False
 
-    def is_assignable(self, other: Type):
+    def is_assignable(self, other: Type) -> bool:
         # Import here to prevent circular dependency.
         from src.ir import java_types as jt
         # We should handle Java primitive arrays
