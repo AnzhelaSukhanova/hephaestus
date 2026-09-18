@@ -1,8 +1,9 @@
 import sys
-from typing import Tuple
+from typing import Optional, Tuple
 
 
-def call_stack_names(skip: int = 0, limit: int | None = None) -> Tuple[str, ...]:
+def call_stack_names(skip: int = 0,
+                     limit: Optional[int] = None) -> Tuple[str, ...]:
     frame = sys._getframe(1 + skip)
     names = []
     while frame is not None and (limit is None or len(names) < limit):
