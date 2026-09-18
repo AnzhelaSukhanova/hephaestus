@@ -1,24 +1,28 @@
 from collections import Counter, defaultdict
+from typing import Generic, TypeVar
 
 
-class StackWithCounter(list):
+T = TypeVar('T')
+
+
+class StackWithCounter(list, Generic[T]):
     def __init__(self):
         super().__init__()
-        self._counter = Counter()  # O(1) amortized contains(element) checker
+        self._counter: Counter[T] = Counter()
 
-    def append(self, object):
-        super().append(object)
-        self._counter[object] += 1
+    def append(self, item: T) -> None:
+        super().append(item)
+        self._counter[item] += 1
 
-    def pop(self, index=-1):
-        object = super().pop(index)
-        self._counter[object] -= 1
-        if self._counter[object] == 0:
-            del self._counter[object]
-        return object
+    def pop(self, index: int = -1) -> T:
+        item = super().pop(index)
+        self._counter[item] -= 1
+        if self._counter[item] == 0:
+            del self._counter[item]
+        return item
 
-    def contains(self, object):
-        return self._counter[object] > 0
+    def contains(self, item: T) -> bool:
+        return self._counter[item] > 0
 
     def _unsupported_mutation(self, *args, **kwargs):
         raise TypeError("StackWithCounter: unsupported mutation")
