@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from typing import Tuple, List, Callable, Union
+from typing import Tuple, List, Callable, Optional, Union
 
 from src import utils as ut
 from src.generators import generators as gens
@@ -62,7 +62,7 @@ class FunctionCallParamGeneration(CallContext):
 
 @dataclass(frozen=True)
 class FunctionBodyGeneration(CallContext):
-    callee: ast.FunctionDeclaration = None
+    callee: Optional[ast.FunctionDeclaration] = None
 
     @property
     def is_inline(self):
