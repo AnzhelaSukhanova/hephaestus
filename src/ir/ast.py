@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Collection, Dict, List, Set, Union, Callable
+from typing import Collection, Dict, List, Optional, Set, Union, Callable
 from copy import deepcopy
 
 import src.ir.type_utils as tu
@@ -290,15 +290,29 @@ class VariableDeclaration(Declaration):
     def __init__(self, name: str,
                  expr: Expr,
                  is_final: bool = True,
-                 var_type: types.Type = None,
-                 inferred_type: types.Type = None):
-        self.name = name
-        self.expr = expr
-        self.is_final = is_final
-        self.var_type = var_type
-        self.inferred_type = var_type if var_type else inferred_type
-        assert self.inferred_type, ("The inferred_type of a variable must"
-                                    " not be None")
+                 var_type: Optional[types.Type] = None,
+                 inferred_type: Optional[types.Type] = None):
+        """
+        var x: CharSequence = String() (a more specific CharSequence)
+        :param name: "x"
+        :param expr: ast.New() with "String" factory
+        :param is_final: val (True, default), var (False)
+        :param var_type: CharSequence
+        :param inferred_type: CharSequence (can be different only if var_type None)
+        """
+
+        # It's important that we don't know if it matches semantic type in Kotlin
+        # ref: work on virtual calls, inline chains. Hephaestus type system is weaker
+        # but we try to fix the consequences of it via casts when it's absolutely necessary
+        # to know static type in Kotlin that'll be semantically derived
+        inferred_type = var_type if var_type is not None else inferred_type
+        assert inferred_type is not None, ("The inferred_type of a variable"
+                                           " must not be None")
+        self.name: str = name
+        self.expr: Expr = expr
+        self.is_final: bool = is_final
+        self.var_type: Optional[types.Type] = var_type
+        self.inferred_type: types.Type = inferred_type
 
     def children(self):
         return [self.expr]
@@ -391,10 +405,25 @@ class ObjectDecleration(Declaration):
 
 
 class SuperClassInstantiation(Node):
-    def __init__(self, class_type: types.Type, args: List[Expr] = []):
+    def __init__(self, class_type: types.Type,
+                 args: Optional[List[Expr]] = []):
+        """
+        We're interested in exact instantiation of superclass,
+        e.g. object Base("a") or SomeInterface for
+
+        class C : Base("a")
+
+        class C : SomeInterface
+
+        Note: There's a difference between args = None and args = []:
+        [] is for Base(), None is for SomeInterface
+
+        :param class_type: Base / SomeInterface
+        :param args: ["a"] / None
+        """
         assert not isinstance(class_type, types.AbstractType)
-        self.class_type = class_type
-        self.args = args
+        self.class_type: types.Type = class_type
+        self.args: Optional[List[Expr]] = args
 
     def children(self):
         return self.args or []
@@ -458,13 +487,13 @@ class ParameterDeclaration(Declaration):
     def __init__(self, name: str,
                  param_type: types.Type,
                  vararg: bool = False,
-                 default: Expr = None,
+                 default: Optional[Expr] = None,
                  inlining_scope: InliningScope = InliningScope.DEFAULT,
                  inherits_default_value: bool = False):
         self.name = name
         self.param_type = param_type
         self.vararg = vararg
-        self.default = default
+        self.default: Optional[Expr] = default
         self.inlining_scope = inlining_scope
         self.inherits_default_value = inherits_default_value
 
@@ -509,44 +538,29 @@ class FunctionDeclaration(Declaration):
     def __init__(self,
                  name: str,
                  params: List[ParameterDeclaration],
-                 ret_type: types.Type,
-                 body: Node,
+                 ret_type: Optional[types.Type],
+                 body: Optional[Union[Block, Expr]],
                  func_type: int,
-                 inferred_type: types.Type = None,
+                 inferred_type: Optional[types.Type] = None,
                  is_final=True,
                  is_inline=False,
                  override=False,
                  type_parameters=[],
                  inherits_param_with_default=False,
                  visibility=Visibilities.UNKNOWN):
-        """
-
-        :param name: Function name
-        :param params: Function name
-        :param ret_type:
-        :param body:
-        :param func_type:
-        :param inferred_type:
-        :param is_final:
-        :param is_inline:
-        :param override:
-        :param type_parameters:
-        :param inherits_param_with_default:
-        :param visibility:
-        """
-        self.name = name
-        self.params = params
-        self.ret_type = ret_type
-        self.body = body
-        self.func_type = func_type
+        inferred_type = ret_type if inferred_type is None else inferred_type
+        assert inferred_type is not None, ("The inferred_type of a function"
+                                           " must not be None")
+        self.name: str = name
+        self.params: List[ParameterDeclaration] = params
+        self.ret_type: Optional[types.Type] = ret_type
+        self.body: Optional[Union[Block, Expr]] = body
+        self.func_type: int = func_type
         self.is_final = is_final
         self.is_inline = is_inline
         self.override = override
         self.type_parameters = type_parameters
-        self.inferred_type = (
-            self.ret_type if inferred_type is None else inferred_type)
-        assert self.inferred_type, ("The inferred_type of a function must"
-                                    " not be None")
+        self.inferred_type: types.Type = inferred_type
         self.inherits_param_with_default = inherits_param_with_default
         self.visibility = visibility
 
@@ -1430,12 +1444,12 @@ class FieldAccess(Expr):
 
 class FunctionCall(Expr):
     def __init__(self, func: str, args: List[CallArgument],
-                 receiver: Expr = None,
+                 receiver: Optional[Expr] = None,
                  type_args: List[types.Type] = [],
                  is_ref_call: bool = False):
         self.func = func
         self.args = args
-        self.receiver = receiver
+        self.receiver: Optional[Expr] = receiver
         self.type_args = type_args
         self.is_ref_call = is_ref_call
         self._can_infer_type_args = False
@@ -1499,7 +1513,7 @@ class FunctionCall(Expr):
 
 
 class FunctionReference(Expr):
-    def __init__(self, func: str, receiver: Expr, signature: types.Type,
+    def __init__(self, func: str, receiver: Optional[Expr], signature: types.Type,
                  target_decl=None):
         self.func = func
         self.receiver = receiver
@@ -1530,7 +1544,8 @@ class FunctionReference(Expr):
 
 
 class Assignment(Expr):
-    def __init__(self, name: str, expr: Expr, receiver: Expr = None):
+    def __init__(self, name: str, expr: Expr,
+                 receiver: Optional[Expr] = None):
         self.name = name
         self.expr = expr
         self.receiver = receiver
