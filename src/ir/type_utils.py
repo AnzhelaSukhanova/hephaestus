@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from collections import OrderedDict
-from typing import TypeVar, List, Tuple, Dict
+from typing import List, Optional, Tuple, Dict
 
 import src.ir.types as tp
 import src.ir.context as ctx
@@ -8,16 +10,15 @@ from src.ir import ast
 from src import utils
 
 
-TypeVarMap = TypeVar('TypeVarMap', bound=Dict[tp.TypeParameter, tp.Type])
-TypeVarMap.__doc__ = """
+TypeVarMap = Dict[tp.TypeParameter, tp.Type]
+"""
 A dict from TypeParameter to Type. We use this structure for replacing
 type parameters when we want to instantiate type constructors and
 parameterized functions.
 """
 
-VarianceChoices = TypeVar('VarianceChoices', bound=Dict[tp.TypeParameter,
-                          Tuple[bool, bool]])
-VarianceChoices.__doc__ = """
+VarianceChoices = Dict[tp.TypeParameter, Tuple[bool, bool]]
+"""
 A boolean map that specifies if in place of a TypeParameter we can use
 use-site variance. The first value is for covariance
 and the second for contravariance.
@@ -813,10 +814,20 @@ def find_lub(type_a, type_b, types, any_type):
 
 def get_decl_from_inheritance(receiver_t: tp.Type,
                               decl_name: str,
-                              context: ctx.Context):
+                              context: ctx.Context) -> Optional[
+                                  Tuple[ast.Declaration, tp.Type]]:
     """
     Inspect the inheritance chain until you find a declaration with a certain
     name.
+
+    class Box<T>(val x: T)
+
+    val box: Box<String> = Box(String())
+
+    :param receiver_t: Box<String>
+    :param decl_name: "x"
+    :param context: ctx.Context
+    :return: (VariableDeclaration("x", inferred_type=T), Box<String>)
     """
     classes = [
         c
