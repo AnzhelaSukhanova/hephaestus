@@ -391,8 +391,10 @@ class WildCardType(Type):
 
 TypeSubstitution = Dict[TypeParameter, Type]
 
-def _get_type_substitution(etype, type_map,
-                           cond=lambda t: t.has_type_variables()):
+def _get_type_substitution(
+        etype: Type, type_map: TypeSubstitution,
+        cond: Callable[[Type], bool] = lambda t: t.has_type_variables()
+) -> Type:
     if etype.is_parameterized():
         return substitute_type_args(etype, type_map, cond)
     if etype.is_wildcard() and etype.bound is not None:
@@ -535,7 +537,7 @@ class TypeConstructor(AbstractType):
         return etype
 
 
-def _to_type_variable_free(t: Type, t_param, factory) -> Type:
+def _to_type_variable_free(t: Type, t_param: TypeParameter, factory) -> Type:
     if t.is_type_var():
         bound = t.get_bound_rec(factory)
         # If the type variable has no bound, then create
