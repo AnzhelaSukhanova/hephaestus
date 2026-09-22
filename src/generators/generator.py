@@ -20,24 +20,26 @@ TODOs:
 """
 # pylint: disable=too-many-instance-attributes,too-many-arguments,dangerous-default-value
 import functools
-from abc import ABC
 from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass
 from enum import Enum
-from typing import Tuple, List, Callable, Optional, Union
+from typing import Tuple, List, Callable
 
 from src import utils as ut
 from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
 from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt
-from src.ir.ast import ParameterDeclaration
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
 from src.ir.data_structures import IncrementalDAGTransitiveClosure
+from src.ir.generation_context import (
+    DefaultValueGeneration, ExprCallSite,
+    FunctionBodyGeneration, FunctionCallParamGeneration, InliningSource,
+    IrFunctionBodyStub, PublicApiInlineBody,
+)
 from src.modules.logging import Logger, log
 
 from src.debug_tools import called_by_suffix, call_stack_tail
@@ -49,63 +51,6 @@ class _ReceiverClassification(str, Enum):
     CANT_DISPROVE_FINAL = "CANT_DISPROVE_FINAL"
     OPEN_REGULAR = "OPEN_REGULAR"
     INTERFACE_OR_ABSTRACT = "INTERFACE_OR_ABSTRACT"
-
-
-@dataclass(frozen=True)
-class CallContext(ABC):
-    pass
-
-@dataclass(frozen=True)
-class FunctionCallParamGeneration(CallContext):
-    callee: ast.FunctionDeclaration
-    target_param: ast.ParameterDeclaration
-
-@dataclass(frozen=True)
-class FunctionBodyGeneration(CallContext):
-    callee: Optional[ast.FunctionDeclaration] = None
-
-    @property
-    def is_inline(self):
-        return bool(self.callee and self.callee.is_inline)
-
-@dataclass(frozen=True)
-class ExprCallSite(CallContext):
-    pass
-
-@dataclass(frozen=True)
-class PublicApiInlineBody(CallContext):
-    callee: ast.FunctionDeclaration
-
-@dataclass(frozen=True)
-class DefaultValueGeneration(CallContext):
-    callee: ast.FunctionDeclaration
-    param_name: str
-
-@dataclass(frozen=True)
-class Token(ABC):
-    pass
-
-@dataclass(frozen=True)
-class IrFunctionBodyStub(Token):
-    pass
-
-@dataclass(frozen=True)
-class InliningSource(CallContext):
-    """Which inline call node the code being generated belongs to.
-
-    Mirrors `org.jetbrains.kotlin.backend.common.lower.inline.CallNode <https://github.com/jetbrains/kotlin/blob/master/compiler/ir/backend.common/src/org/jetbrains/kotlin/backend/common/lower/inline/InlineCallCycleCheckerLowering.kt#L19>`_.
-    CallNode(val function: IrFunction, val callLocation: IrBody)
-
-    InliningSource = (func: ast.FunctionDeclaration, location: str | IrFunctionBodyStub)
-
-    Location is either IrFunctionBodyStub or the name of default param we're generating
-    """
-    func: ast.FunctionDeclaration
-    location: Union[str, IrFunctionBodyStub]
-
-    @property
-    def node(self):
-        return (self.func, self.location)
 
 class Generator():
     def __init__(self,
