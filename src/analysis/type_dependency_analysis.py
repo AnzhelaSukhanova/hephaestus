@@ -1,11 +1,12 @@
 from contextlib import contextmanager
 from copy import deepcopy, copy
 from collections import defaultdict
-from typing import NamedTuple, Union, Dict, List
+from typing import (DefaultDict, Dict, Iterable, List, NamedTuple, Optional,
+                    Tuple, TypeAlias, Union)
 
 from src import utils, graph_utils as gu
 from src.ir import ast, types as tp, type_utils as tu
-from src.ir.context import get_decl
+from src.ir.context import Context, NamespacePath, get_decl
 from src.ir.visitors import DefaultVisitor
 from src.transformations.base import change_namespace
 
@@ -18,45 +19,45 @@ class TypeVarNode(NamedTuple):
     t: tp.TypeParameter
     is_decl: bool
 
-    def __str__(self):
+    def __str__(self) -> str:
         prefix = "!" if self.is_decl else ""
         return prefix + "TypeVariable[{}]".format(self.node_id)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
     @property
-    def node_id(self):
+    def node_id(self) -> str:
         return self.parent_id + "/" + self.t.name
 
-    def is_omittable(self):
+    def is_omittable(self) -> bool:
         return False
 
-    def get_type(self):
+    def get_type(self) -> tp.TypeParameter:
         return self.t
 
 
 class TypeNode(NamedTuple):
-    t: tp.Type
-    parent_id: str
+    t: Optional[tp.Type]
+    parent_id: Optional[str]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "Type[{}]".format(self.node_id)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
     @property
-    def node_id(self):
+    def node_id(self) -> str:
         prefix = "" if self.parent_id is None else self.parent_id + "/"
         if self.t is None:
             return prefix + "*"
         return prefix + self.t.name
 
-    def is_omittable(self):
+    def is_omittable(self) -> bool:
         return False
 
-    def get_type(self):
+    def get_type(self) -> Optional[tp.Type]:
         return self.t
 
 
@@ -64,20 +65,20 @@ class DeclarationNode(NamedTuple):
     parent_id: str
     decl: ast.Declaration
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "Declaration[{}]".format(self.node_id)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
     @property
-    def node_id(self):
+    def node_id(self) -> str:
         return self.parent_id + "/" + self.decl.name
 
-    def is_omittable(self):
+    def is_omittable(self) -> bool:
         return getattr(self.decl, "inferred_type", False) is not False
 
-    def get_type(self):
+    def get_type(self) -> Optional[tp.Type]:
         return self.decl.get_type()
 
 
@@ -86,20 +87,20 @@ class TypeConstructorInstantiationCallNode(NamedTuple):
     t: tp.ParameterizedType
     constructor_call: ast.New
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "TypeConInstCall[{}]".format(self.node_id)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
     @property
-    def node_id(self):
+    def node_id(self) -> str:
         return self.parent_id + "/" + self.t.name
 
-    def is_omittable(self):
+    def is_omittable(self) -> bool:
         return True
 
-    def get_type(self):
+    def get_type(self) -> tp.ParameterizedType:
         return self.t
 
 
@@ -107,20 +108,20 @@ class TypeConstructorInstantiationDeclNode(NamedTuple):
     parent_id: str
     t: tp.ParameterizedType
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "TypeConInstDecl[{}]".format(self.node_id)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
     @property
-    def node_id(self):
+    def node_id(self) -> str:
         return self.parent_id + "/" + self.t.name
 
-    def is_omittable(self):
+    def is_omittable(self) -> bool:
         return False
 
-    def get_type(self):
+    def get_type(self) -> tp.ParameterizedType:
         return self.t
 
 
@@ -157,14 +158,23 @@ class Edge(NamedTuple):
         return self.label == self.INFERRED
 
 
-def construct_edge(type_graph, source, target, edge_label):
+TypeGraphNode: TypeAlias = Union[
+    TypeNode, TypeVarNode, DeclarationNode,
+    TypeConstructorInstantiationCallNode, TypeConstructorInstantiationDeclNode
+]
+TypeGraph: TypeAlias = Dict[TypeGraphNode, List[Edge]]
+
+
+def construct_edge(type_graph: TypeGraph, source: TypeGraphNode,
+                   target: TypeGraphNode, edge_label: int) -> None:
     if source not in type_graph:
         type_graph[source] = [Edge(target, edge_label)]
     else:
         type_graph[source].append(Edge(target, edge_label))
 
 
-def _handle_declaration_node(type_graph, node):
+def _handle_declaration_node(type_graph: TypeGraph,
+                             node: DeclarationNode) -> None:
     edges = type_graph[node]
     new_edges = []
     for e in edges:
@@ -178,7 +188,10 @@ def _handle_declaration_node(type_graph, node):
     type_graph[node] = new_edges
 
 
-def _handle_type_inst_call_node(type_graph, node):
+def _handle_type_inst_call_node(
+        type_graph: TypeGraph,
+        node: TypeConstructorInstantiationCallNode
+) -> None:
     for type_var in type_graph[node]:
         edges = type_graph[type_var.target]
         edges = [
@@ -189,7 +202,8 @@ def _handle_type_inst_call_node(type_graph, node):
         type_graph[type_var.target] = edges
 
 
-def is_combination_feasible(type_graph, combination):
+def is_combination_feasible(type_graph: TypeGraph,
+                            combination: Iterable[TypeGraphNode]) -> bool:
     # Step 1: Remove all required edges from the graph. These edge removals
     # represent the type information that is omitted from the program.
     for node in combination:
@@ -247,32 +261,26 @@ def _is_recursive_call(func_name, func_body):
     return False
 
 
-class TypeDependencyAnalysis(DefaultVisitor):
-    def __init__(self, program, namespace=None, type_graph=None):
+class TypeDependencyAnalysis(DefaultVisitor[None, TypeGraph]):
+    def __init__(self, program: ast.Program,
+                 namespace: Optional[NamespacePath] = None,
+                 type_graph: Optional[TypeGraph] = None):
         self._bt_factory = program.bt_factory
-        self.type_graph: Dict[
-            Union[
-                TypeNode,
-                TypeVarNode,
-                DeclarationNode,
-                TypeConstructorInstantiationCallNode,
-                TypeConstructorInstantiationDeclNode
-            ],
-            List[Edge]
-        ] = type_graph or {}
-        self.program = program
-        self._context = self.program.context
-        self._namespace = namespace or ast.GLOBAL_NAMESPACE
+        self.type_graph: TypeGraph = type_graph or {}
+        self.program: ast.Program = program
+        self._context: Context = self.program.context
+        self._namespace: NamespacePath = namespace or ast.GLOBAL_NAMESPACE
         self._types = self.program.get_types()
-        self._stack: list = list(ast.GLOBAL_NAMESPACE)
-        self._inferred_nodes: dict = defaultdict(list)
-        self._exp_type: tp.Type = None
-        self._exp_node_id = None
+        self._stack: List[str] = list(ast.GLOBAL_NAMESPACE)
+        self._inferred_nodes: DefaultDict[
+            str, List[TypeGraphNode]] = defaultdict(list)
+        self._exp_type: Optional[tp.Type] = None
+        self._exp_node_id: Optional[str] = None
         self._stream = iter(range(0, 10000))
-        self._func_non_void_block_type = None
+        self._func_non_void_block_type: Optional[tp.Type] = None
         self._id_gen = utils.IdGen()
 
-    def result(self):
+    def result(self) -> TypeGraph:
         return self.type_graph
 
     ### TYPE CONTEXT MANAGEMENT ###
@@ -294,7 +302,7 @@ class TypeDependencyAnalysis(DefaultVisitor):
             self._exp_type = saved_exp_type
             self._exp_node_id = saved_exp_node_id
 
-    def _get_node_id(self):
+    def _get_node_id(self) -> Tuple[str, Optional[str]]:
         top_stack = self._stack[-1]
         return self._id_gen.get_node_id(top_stack)
 
