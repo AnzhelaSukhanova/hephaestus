@@ -2,15 +2,16 @@ from copy import deepcopy
 
 import pytest
 
-from src.generators.generator import (
-    ExprCallSite, FunctionBodyGeneration, DefaultValueGeneration, Generator,
-    InliningSource, IrFunctionBodyStub
-)
+from src.generators.generator import Generator
 from src.generators import utils as gu
 from src.generators.config import cfg
 from src.ir import ast, kotlin_types as kt, types as tp
 from src.ir.context import Context
 from src.ir.data_structures import IncrementalDAGTransitiveClosure
+from src.ir.generation_context import (
+    DefaultValueGeneration, ExprCallSite, FunctionBodyGeneration,
+    InliningSource, IrFunctionBodyStub,
+)
 from src import utils as ut
 
 

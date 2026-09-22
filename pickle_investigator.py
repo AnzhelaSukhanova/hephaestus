@@ -4,9 +4,10 @@ import sys
 # Add the repo to the path
 sys.path.insert(0, '/Users/nika/IdeaProjects/hephaestus')
 
-from src.generators.generator import Generator, InliningSource, IrFunctionBodyStub
+from src.generators.generator import Generator
 from src.ir import ast
 from src.ir.data_structures import IncrementalDAGTransitiveClosure
+from src.ir.generation_context import InliningSource, IrFunctionBodyStub
 from src import utils as ut
 
 def main():
