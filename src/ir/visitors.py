@@ -264,6 +264,3 @@ class DefaultVisitorUpdate(DefaultVisitor):
             new_children.append(c.accept(self))
         node.update_children(new_children)
         return node
-
-    def visit_enforce_type_via_cast(self, node):
-        return self._visit_node(node)
