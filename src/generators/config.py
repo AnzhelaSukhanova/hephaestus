@@ -2,19 +2,25 @@
 This file contains the classes that are responsible for configuring the
 generation policies.
 """
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass, fields, is_dataclass
+from typing import TypeAlias
+
+ConfigOverrideValue: TypeAlias = int | float | bool | dict[str, "ConfigOverrideValue"]
 
 
 class Singleton(type):
-    _instances = {}
+    _instances: dict[type, object] = {}
+
     def __call__(cls, *args, **kwargs):
         if cls not in cls._instances:
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
 
 
-def process_arg(config, name, value):
+def process_arg(config: ConfigGroup, name: str, value: ConfigOverrideValue) -> None:
     assert hasattr(config, name), \
         f"{type(config).__name__} has not {name} argument"
     old_value = getattr(config, name)
@@ -36,7 +42,7 @@ def process_arg(config, name, value):
             process_arg(old_value, key, val)
 
 
-def validate_config(config):
+def validate_config(config: ConfigValue) -> None:
     if is_dataclass(config):
         for field in fields(config):
             validate_config(getattr(config, field.name))
@@ -73,19 +79,22 @@ class GenLimits:
     inline_default_depth: int # generation depth at the inlined default
     ordinary_default_depth: int # generation depth at the ordinary (not inlined) default
 
+
 @dataclass
 class VisibilityProbabilities:
     public: float
     private: float
     not_specified: float
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert abs(self.public + self.private + self.not_specified - 1.0) <= 1e-9
+
 
 @dataclass
 class ModalityProbabilities:
     override_final: float
     declaration_final: float
+
 
 @dataclass
 class ClassTypeProbabilities:
@@ -93,8 +102,9 @@ class ClassTypeProbabilities:
     abstract: float
     interface: float
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert abs(self.regular + self.abstract + self.interface - 1.0) <= 1e-9
+
 
 @dataclass
 class HelperFunctionProbabilities:
@@ -102,8 +112,9 @@ class HelperFunctionProbabilities:
     is_global_function: float
     is_local_function: float
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert abs(self.is_global_method + self.is_global_function + self.is_local_function - 1.0) <= 1e-9
+
 
 @dataclass
 class TopLevelDeclarationProbabilities:
@@ -111,7 +122,7 @@ class TopLevelDeclarationProbabilities:
     class_declaration: float
     variable_declaration: float
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert abs(self.function_declaration + self.class_declaration + self.variable_declaration - 1.0) <= 1e-9
 
 # In many scenarios like func_ref_call, there may be a slighter change that
@@ -155,7 +166,7 @@ class GenConfig(metaclass=Singleton):
     prob: Probabilities
     dis: Disabled
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.limits = GenLimits(
             cls=ClassLimits(
                 max_fields=2,
@@ -174,7 +185,7 @@ class GenConfig(metaclass=Singleton):
             inline_default_depth=7,
             ordinary_default_depth=6
         )
-        self.prob=Probabilities(
+        self.prob = Probabilities(
             crossmodule_probability=0.5,
             max_module_chain_depth=3,
             drop_indirect_deps_prob=0.0,
@@ -223,30 +234,37 @@ class GenConfig(metaclass=Singleton):
                 is_local_function=0.25
             ),
             top_level_declarations=TopLevelDeclarationProbabilities(
-                function_declaration=1/3,
-                class_declaration=1/3,
-                variable_declaration=1/3
+                function_declaration=1 / 3,
+                class_declaration=1 / 3,
+                variable_declaration=1 / 3
             )
         )
-        self.dis=Disabled(
+        self.dis = Disabled(
             use_site_variance=False,
             use_site_contravariance=False
         )
 
-    def json_config(self, kwargs):
+    def json_config(self, kwargs: JsonConfig) -> None:
         assert isinstance(kwargs, dict)
         for key, value in kwargs.items():
             process_arg(self, key, value)
         validate_config(self)
 
-    def to_json(self):
+    def to_json(self) -> str:
         return json.dumps(self, default=lambda o: o.__dict__)
 
 
-cfg = GenConfig()
+ConfigGroup: TypeAlias = (
+        GenConfig | GenLimits | ClassLimits | FunctionLimits | Probabilities |
+        VisibilityProbabilities | ModalityProbabilities | ClassTypeProbabilities |
+        HelperFunctionProbabilities | TopLevelDeclarationProbabilities | Disabled
+)
+ConfigValue: TypeAlias = int | float | bool | ConfigGroup
+
+cfg: GenConfig = GenConfig()
 
 
-def main():
+def main() -> None:
     __import__('pprint').pprint(cfg.to_json())
 
 
