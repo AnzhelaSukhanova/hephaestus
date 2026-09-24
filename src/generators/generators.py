@@ -8,18 +8,19 @@ even if they don't need it, for API compatibility reasons.
 """
 from src import utils
 from src.ir import ast
+from src.ir import types as tp
 from src.generators import utils as gu
 
 
 # pylint: disable=unused-argument
-def gen_string_constant(expr_type=None) -> ast.StringConstant:
+def gen_string_constant(expr_type: tp.Type) -> ast.StringConstant:
     """Generate a string constant.
     """
     return ast.StringConstant(gu.gen_identifier())
 
 
 # pylint: disable=unused-argument
-def gen_integer_constant(expr_type=None) -> ast.IntegerConstant:
+def gen_integer_constant(expr_type: tp.Type) -> ast.IntegerConstant:
     """Generate an integer constant.
 
     The generated integers are between -100 and 100.
@@ -27,7 +28,7 @@ def gen_integer_constant(expr_type=None) -> ast.IntegerConstant:
     return ast.IntegerConstant(utils.random.integer(-100, 100), expr_type)
 
 
-def gen_real_constant(expr_type=None) -> ast.RealConstant:
+def gen_real_constant(expr_type: tp.Type) -> ast.RealConstant:
     """Generate a real constant.
 
     The generated reals are between `-100.1000` and `100.1000`.
@@ -39,14 +40,14 @@ def gen_real_constant(expr_type=None) -> ast.RealConstant:
 
 
 # pylint: disable=unused-argument
-def gen_bool_constant(expr_type=None) -> ast.BooleanConstant:
+def gen_bool_constant(expr_type: tp.Type) -> ast.BooleanConstant:
     """Generate a boolean constant.
     """
     return ast.BooleanConstant(utils.random.choice(['true', 'false']))
 
 
 # pylint: disable=unused-argument
-def gen_char_constant(expr_type=None) -> ast.CharConstant:
+def gen_char_constant(expr_type: tp.Type) -> ast.CharConstant:
     """Generate a character constant.
     """
     return ast.CharConstant(utils.random.char())
