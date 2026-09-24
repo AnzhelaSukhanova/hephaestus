@@ -2,7 +2,7 @@
 from __future__ import annotations
 from copy import deepcopy, copy
 from collections import defaultdict
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, TypeAlias
 
 from src.ir.node import Node
 
@@ -389,7 +389,7 @@ class WildCardType(Type):
     def is_primitive(self) -> bool:
         return False
 
-TypeSubstitution = Dict[TypeParameter, Type]
+TypeSubstitution: TypeAlias = Dict[TypeParameter, Type]
 
 def _get_type_substitution(
         etype: Type, type_map: TypeSubstitution,
