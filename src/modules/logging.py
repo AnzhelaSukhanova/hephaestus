@@ -3,9 +3,9 @@ import os
 from src.utils import mkdir
 
 
-class Logger():
-    def __init__(self, session, test_directory, iteration, name, number,
-                 stdout=False):
+class Logger:
+    def __init__(self, session: str, test_directory: str, iteration: int,
+                 name: str, number: int, stdout: bool = False) -> None:
         self.session = session
         self.test_directory = test_directory
         self.iteration = iteration
@@ -17,15 +17,15 @@ class Logger():
             mkdir(self.directory)
             self.filename = os.path.join(self.directory, str(self.iteration))
 
-    def log_info(self):
+    def log_info(self) -> None:
         msg = "\n{}\nTransformation name:{}\nTransformation No: {}\n\n".format(
-            10*"=",
+            10 * "=",
             self.transformation_name,
             self.transformation_number
         )
         self.log(msg)
 
-    def log(self, msg):
+    def log(self, msg: object) -> None:
         if self.stdout:
             print(msg)
         else:
@@ -34,6 +34,6 @@ class Logger():
                 out.write('\n')
 
 
-def log(logger: Logger, msg: str):
+def log(logger: Logger | None, msg: object) -> None:
     if logger is not None:
         logger.log(msg)
