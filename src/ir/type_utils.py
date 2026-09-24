@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import List, Optional, Tuple, Dict
+from typing import Dict, List, Optional, Tuple, TypeAlias
 
 import src.ir.types as tp
 import src.ir.builtins as bt
@@ -9,14 +9,14 @@ from src.ir import ast
 from src import utils
 
 
-TypeVarMap = Dict[tp.TypeParameter, tp.Type]
+TypeVarMap: TypeAlias = Dict[tp.TypeParameter, tp.Type]
 """
 A dict from TypeParameter to Type. We use this structure for replacing
 type parameters when we want to instantiate type constructors and
 parameterized functions.
 """
 
-VarianceChoices = Dict[tp.TypeParameter, Tuple[bool, bool]]
+VarianceChoices: TypeAlias = Dict[tp.TypeParameter, Tuple[bool, bool]]
 """
 A boolean map that specifies if in place of a TypeParameter we can use
 use-site variance. The first value is for covariance
