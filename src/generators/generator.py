@@ -24,25 +24,34 @@ from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
 from enum import Enum
-from typing import Tuple, List, Callable
+from collections.abc import Callable, Iterator, Mapping
+from typing import DefaultDict, TypeAlias
 
 from src import utils as ut
 from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
 from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt
-from src.ir.context import Context
+from src.ir.context import Context, NamespacePath
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
 from src.ir.data_structures import IncrementalDAGTransitiveClosure
 from src.ir.generation_context import (
-    DefaultValueGeneration, ExprCallSite,
+    CallContext, DefaultValueGeneration, ExprCallSite,
     FunctionBodyGeneration, FunctionCallParamGeneration, InliningSource,
     IrFunctionBodyStub, PublicApiInlineBody,
 )
 from src.modules.logging import Logger, log
 
 from src.debug_tools import called_by_suffix, call_stack_tail
+
+ContextDeclaration: TypeAlias = (
+        ast.FunctionDeclaration | ast.ClassDeclaration | ast.VariableDeclaration |
+        ast.FieldDeclaration | ast.ParameterDeclaration | ast.Lambda
+)
+CallableValueExpr: TypeAlias = ast.Lambda | ast.FunctionReference
+ExpressionGenerator: TypeAlias = Callable[[tp.Type], ast.Expr]
+EscalationLog: TypeAlias = dict[str, str | list[str] | tuple[str, ...]]
 
 
 class _ReceiverClassification(str, Enum):
@@ -52,12 +61,13 @@ class _ReceiverClassification(str, Enum):
     OPEN_REGULAR = "OPEN_REGULAR"
     INTERFACE_OR_ABSTRACT = "INTERFACE_OR_ABSTRACT"
 
-class Generator():
+
+class Generator:
     def __init__(self,
-                 language=None,
-                 options={},
-                 logger=None,
-                 target_module=None):
+                 language: str,
+                 options: Mapping[str, int | bool] = {},
+                 logger: Logger | None = None,
+                 target_module: str | None = None) -> None:
         """
         Makes a generator object.
 
@@ -67,32 +77,33 @@ class Generator():
         :param target_module: Module we're currently generating (for cross-module regime), e.g. `src.d2` is a module with klib `2.klib`.
         """
         assert language is not None, "You must specify the language"
-        self.language = language
-        self.logger: Logger = logger
-        self.target_module = target_module
-        self._direct_dependency_modules = frozenset()
-        self.context: Context = None
+        self.language: str = language
+        self.logger: Logger | None = logger
+        self.target_module: str | None = target_module
+        self._direct_dependency_modules: frozenset[str] = frozenset()
+        self.context: Context | None = None
         self.bt_factory: BuiltinFactory = BUILTIN_FACTORIES[language]
-        self.depth = 1
-        self._vars_in_context = defaultdict(lambda: 0)
-        self._new_from_class = None
-        self.namespace = ('global',)
-        self.enable_pecs = not language == 'kotlin'
-        self.disable_variance_functions = language == 'kotlin'
-        self.escalations = []
-        self.record_escalations = not options.get("disable_metrics", False)
+        self.depth: int = 1
+        self._vars_in_context: DefaultDict[NamespacePath, int] = defaultdict(int)
+        self._new_from_class: ast.ClassDeclaration | None = None
+        self.namespace: NamespacePath = ast.GLOBAL_NAMESPACE
+        self.enable_pecs: bool = language != 'kotlin'
+        self.disable_variance_functions: bool = language == 'kotlin'
+        self.escalations: list[EscalationLog] = []
+        self.record_escalations: bool = not options.get("disable_metrics", False)
 
         # This flag is used for Java lambdas where local variables references
         # must be final.
-        self._inside_java_lambda = False
+        self._inside_java_lambda: bool = False
 
-        self.function_type = type(self.bt_factory.get_function_type())
-        self.function_types = self.bt_factory.get_function_types(
+        self.function_type: type[tp.TypeConstructor] = type(
+            self.bt_factory.get_function_type())
+        self.function_types: list[tp.TypeConstructor] = self.bt_factory.get_function_types(
             cfg.limits.max_functional_params)
 
-        self.ret_builtin_types = self.bt_factory.get_non_nothing_types()
-        self.builtin_types = self.ret_builtin_types + \
-                             [self.bt_factory.get_void_type()]
+        self.ret_builtin_types: list[tp.Type] = self.bt_factory.get_non_nothing_types()
+        self.builtin_types: list[tp.Type] = self.ret_builtin_types + \
+                                            [self.bt_factory.get_void_type()]
 
         # In some case we need to use two namespaces. One for having access
         # to variables from scope, and one for adding new declarations.
@@ -100,24 +111,25 @@ class Generator():
         # `generate_expr` in `_gen_func_params_with_default` we need both
         # namespaces. To use one namespace we must model scope better.
         # Almost always declaration_namespace is set to None to be ignored
-        self.declaration_namespace = None
-        self.int_stream = iter(range(1, 10000))
-        self._in_super_call = False
+        self.declaration_namespace: NamespacePath | None = None
+        self.int_stream: Iterator[int] = iter(range(1, 10000))
+        self._in_super_call: bool = False
         # We use this data structure to store blacklisted classes, i.e.,
         # classes that are incomplete (we do not have the information regarding
         # their fields and functions yet). So, we avoid instantiating these
         # classes or using them as supertypes, because we do not have the
         # complete information about them.
-        self._blacklisted_classes: set = set()
+        self._blacklisted_classes: set[str] = set()
 
-        self.inline_functions: set = set()
-        self.inline_call_graph = IncrementalDAGTransitiveClosure()
+        self.inline_functions: set[ast.FunctionDeclaration] = set()
+        self.inline_call_graph: IncrementalDAGTransitiveClosure = \
+            IncrementalDAGTransitiveClosure()
         # Track if we're currently inside an inline function body
         self._inside_inline_function: bool = False
 
     ### Entry Point Generators ###
 
-    def generate(self, context=None) -> ast.Program:
+    def generate(self, context: Context | None = None) -> ast.Program:
         """Generate a program.
 
         It first generates a number `n` top-level declarations,
@@ -142,7 +154,8 @@ class Generator():
         _, declaration = ut.split_qualified_name(name)
         return declaration.rsplit('.', 1)[-1]
 
-    def _gen_name(self, ident_type=None, for_param=False, name=None):
+    def _gen_name(self, ident_type: str | None = None, for_param: bool = False,
+                  name: str | None = None) -> str:
         """Generate a name, making qualified global names for this module
         when they can be used by different module"""
         name = gu.gen_identifier(ident_type) if name is None else name
@@ -151,7 +164,7 @@ class Generator():
         prefix = self.target_module + '.'
         return name if name.startswith(prefix) else prefix + name
 
-    def gen_top_level_declaration(self):
+    def gen_top_level_declaration(self) -> None:
         """Generate a top-level declaration and add it in the context.
 
         Top-level declarations are defined in the global scope.
@@ -184,7 +197,7 @@ class Generator():
         """
 
         initial_namespace = self.namespace
-        self.namespace += ('main', )
+        self.namespace += ('main',)
         initial_depth = self.depth
         self.depth += 1
         main_func = ast.FunctionDeclaration(
@@ -195,7 +208,7 @@ class Generator():
             func_type=ast.FunctionDeclaration.FUNCTION)
         self._add_node_to_parent(self.namespace, main_func)
         expr = self.generate_expr()
-        decls = list(self.context.get_declarations(
+        decls: list[ast.Declaration] = list(self.context.get_declarations(
             self.namespace, True).values())
         decls = [d for d in decls
                  if not isinstance(d, ast.ParameterDeclaration)]
@@ -211,12 +224,15 @@ class Generator():
     # FunctionDeclaration, ParameterDeclaration, ClassDeclaration,
     # FieldDeclaration, and VariableDeclaration
 
-    def _remove_unused_type_params(self, type_params, params, ret_type):
+    def _remove_unused_type_params(self, type_params: list[tp.TypeParameter],
+                                   params: list[ast.ParameterDeclaration],
+                                   ret_type: tp.Type) -> None:
         """
         Remove function's type parameters that are not included in its
         signature.
         """
-        def get_type_vars(t):
+
+        def get_type_vars(t: tp.Type) -> list[tp.TypeParameter]:
             if t.is_type_var():
                 return [t]
             return getattr(t, "get_type_variables", lambda x: [])(
@@ -248,28 +264,30 @@ class Generator():
                 t_param.bound = tp.substitute_type(t_param.bound, replaced)
 
     def _set_initial_inlining_scope_for_inline_functions(self,
-                                                         param: ast.ParameterDeclaration):
+                                                         param: ast.ParameterDeclaration) -> None:
         if param.param_type.is_function_type():
             param.inlining_scope = ast.InliningScope.INLINE
 
     def _escalate_inline_param(self,
-                               param: ast.ParameterDeclaration):
+                               param: ast.ParameterDeclaration) -> None:
         param.inlining_scope = ast.InliningScope.NOINLINE
 
     def gen_func_decl(self,
-                      etype:tp.Type=None,
-                      not_void=False,
-                      class_is_final=False,
-                      func_name:str=None,
-                      params:List[ast.ParameterDeclaration]=None,
-                      abstract=False,
-                      is_interface=False,
-                      declared_as_override=False,
-                      inherits_param_with_default=False,
-                      type_params:List[tp.TypeParameter]=None,
-                      namespace=None,
-                      visibility:ast.Visibility=None,
-                      required_inline_call_source: tuple = None
+                      etype: tp.Type | None = None,
+                      not_void: bool = False,
+                      class_is_final: bool = False,
+                      func_name: str | None = None,
+                      params: list[ast.ParameterDeclaration] | None = None,
+                      abstract: bool = False,
+                      is_interface: bool = False,
+                      declared_as_override: bool = False,
+                      inherits_param_with_default: bool = False,
+                      type_params: list[tp.TypeParameter] | None = None,
+                      namespace: NamespacePath | None = None,
+                      visibility: ast.Visibility | None = None,
+                      required_inline_call_source: (
+                          tuple[ast.FunctionDeclaration, str | IrFunctionBodyStub] | None
+                      ) = None
                       ) -> ast.FunctionDeclaration:
         """Generate a function declaration.
 
@@ -333,7 +351,8 @@ class Generator():
                     ],
                     weights=[
                         cfg.prob.function_visibility.public,
-                        cfg.prob.function_visibility.private if not (abstract or is_interface or declared_as_override or nested_function) else 0,
+                        cfg.prob.function_visibility.private if not (
+                                    abstract or is_interface or declared_as_override or nested_function) else 0,
                         cfg.prob.function_visibility.not_specified,
                     ]
                 )[0]
@@ -350,9 +369,11 @@ class Generator():
                                 class_method and
                                 (
                                     # In Kotlin all override methods are open, unless final is written
-                                        (declared_as_override and ut.random.bool(1 - cfg.prob.class_methods_modality.override_final)) or
+                                        (declared_as_override and ut.random.bool(
+                                            1 - cfg.prob.class_methods_modality.override_final)) or
                                         # In Kotlin all ordinary methods are final, unless open is written
-                                        (not declared_as_override and ut.random.bool(1 - cfg.prob.class_methods_modality.declaration_final))
+                                        (not declared_as_override and ut.random.bool(
+                                            1 - cfg.prob.class_methods_modality.declaration_final))
                                 )
                         )
                 )
@@ -460,7 +481,7 @@ class Generator():
 
     # Where
 
-    def _gen_func_params_with_default(self) -> List[ast.ParameterDeclaration]:
+    def _gen_func_params_with_default(self) -> list[ast.ParameterDeclaration]:
         """Generate function parameters that may mark one for default.
 
         It will generate at most one parameter with a default value. (TODO: verify, seems not even before changes)
@@ -478,7 +499,8 @@ class Generator():
             params.append(param)
         return params
 
-    def _gen_param_defaults(self, func: ast.FunctionDeclaration, params: List[ast.ParameterDeclaration]):
+    def _gen_param_defaults(self, func: ast.FunctionDeclaration,
+                            params: list[ast.ParameterDeclaration]) -> None:
         """Generate default expressions for parameters marked with _pending_default.
         Split done as part of supporting cases like KT-88147
         """
@@ -491,12 +513,13 @@ class Generator():
             self.namespace = self.namespace[:-1]
             functional_param_of_inline_func = func.is_inline and param.get_type().is_function_type()
             # Can't become NOINLINE. Since params are generated before body.
-            param_will_be_inlined = functional_param_of_inline_func and param.inlining_scope in (ast.InliningScope.INLINE, ast.InliningScope.CROSSINLINE)
+            param_will_be_inlined = functional_param_of_inline_func and param.inlining_scope in (
+                ast.InliningScope.INLINE, ast.InliningScope.CROSSINLINE)
             with self.context.call_contexts(
                     subtree_pushed_call_context=[
-                        DefaultValueGeneration(func, param.name), # impact whether _var_decls_allowed
+                        DefaultValueGeneration(func, param.name),  # impact whether _var_decls_allowed
                         InliningSource(func, param.name) if func.is_inline else None,
-                        PublicApiInlineBody(func) # must be added after KT-87975
+                        PublicApiInlineBody(func)  # must be added after KT-87975
                         if (
                                 func.is_inline and
                                 func.visibility.resolve().is_public_api
@@ -505,7 +528,8 @@ class Generator():
                     ]):
                 if param_will_be_inlined:
                     with self._restricted_depth_generation(cfg.limits.inline_default_depth):
-                        expr = self._gen_func_ref_lambda(param.get_type(), only_leaves=(cfg.limits.inline_default_depth == 0))
+                        expr = self._gen_func_ref_lambda(param.get_type(),
+                                                         only_leaves=(cfg.limits.inline_default_depth == 0))
                         # Also anonymous functions are possible here, but we don't have machinery yet to make them
                 else:
                     with self._restricted_depth_generation(cfg.limits.ordinary_default_depth):
@@ -516,7 +540,7 @@ class Generator():
             param.default = expr
             del param._pending_default
 
-    def gen_param_decl(self, etype=None) -> ast.ParameterDeclaration:
+    def gen_param_decl(self, etype: tp.Type | None = None) -> ast.ParameterDeclaration:
         """Generate a function Parameter Declaration.
 
         Args:
@@ -532,13 +556,15 @@ class Generator():
         return param
 
     def gen_class_decl(self,
-                       field_type: tp.Type=None,
-                       fret_type: tp.Type=None,
-                       not_void: bool=False,
-                       type_params: List[tp.TypeParameter]=None,
-                       class_name: str=None,
-                       signature: tp.ParameterizedType=None,
-                       required_inline_call_source: tuple = None
+                       field_type: tp.Type | None = None,
+                       fret_type: tp.Type | None = None,
+                       not_void: bool = False,
+                       type_params: list[tp.TypeParameter] | None = None,
+                       class_name: str | None = None,
+                       signature: tp.ParameterizedType | None = None,
+                       required_inline_call_source: (
+                           tuple[ast.FunctionDeclaration, str | IrFunctionBodyStub] | None
+                       ) = None
                        ) -> ast.ClassDeclaration:
         """Generate a class declaration.
 
@@ -599,7 +625,7 @@ class Generator():
 
     # Where
 
-    def _select_superclass(self, only_interfaces: bool) -> gu.SuperClassInfo:
+    def _select_superclass(self, only_interfaces: bool) -> gu.SuperClassInfo | None:
         """
         Select a superclass for a class.
 
@@ -614,7 +640,7 @@ class Generator():
 
         current_cls = self.namespace[-1]
 
-        def is_cls_candidate(cls):
+        def is_cls_candidate(cls: ast.ClassDeclaration) -> bool:
             # A class should not inherit from itself to avoid circular
             # dependency problems.
             if cls.name == current_cls:
@@ -663,9 +689,9 @@ class Generator():
 
     def gen_class_fields(self,
                          curr_cls: ast.ClassDeclaration,
-                         super_cls_info: gu.SuperClassInfo,
-                         field_type: tp.Type=None
-                         ) -> List[ast.FieldDeclaration]:
+                         super_cls_info: gu.SuperClassInfo | None,
+                         field_type: tp.Type | None = None
+                         ) -> list[ast.FieldDeclaration]:
         """Generate fields for a class.
 
         It also adds the fields in the context.
@@ -718,7 +744,8 @@ class Generator():
 
     # Where
 
-    def _add_node_to_class(self, cls, node):
+    def _add_node_to_class(self, cls: ast.ClassDeclaration,
+                           node: gu.AttributeDeclaration) -> None:
         if isinstance(node, ast.FunctionDeclaration):
             cls.functions.append(node)
             return
@@ -730,7 +757,8 @@ class Generator():
         assert False, ('Trying to put a node in class other than a function',
                        ' and a field')
 
-    def _add_node_to_parent(self, parent_namespace, node):
+    def _add_node_to_parent(self, parent_namespace: NamespacePath,
+                            node: ContextDeclaration) -> None:
         node_type = {
             ast.FunctionDeclaration: self.context.add_func,
             ast.ClassDeclaration: self.context.add_class,
@@ -749,17 +777,18 @@ class Generator():
 
         node_type[type(node)](parent_namespace, node.name, node)
 
-
     # And
 
     def gen_class_functions(self,
-                            curr_cls, super_cls_info,
-                            not_void=False,
-                            fret_type=None,
-                            signature: tp.ParameterizedType=None,
-                            required_inline_call_source:
-                            tuple = None
-                            ) -> List[ast.FunctionDeclaration]:
+                            curr_cls: ast.ClassDeclaration,
+                            super_cls_info: gu.SuperClassInfo | None,
+                            not_void: bool = False,
+                            fret_type: tp.Type | None = None,
+                            signature: tp.ParameterizedType | None = None,
+                            required_inline_call_source: (
+                                tuple[ast.FunctionDeclaration, str | IrFunctionBodyStub] | None
+                            ) = None
+                            ) -> list[ast.FunctionDeclaration]:
         """Generate methods for a class.
 
         If the method has a superclass, then it will try to implement any
@@ -856,7 +885,6 @@ class Generator():
                                        is_interface=curr_cls.is_interface()))
         return funcs
 
-
     # And
 
     def _gen_func_from_existing(self,
@@ -921,8 +949,8 @@ class Generator():
 
     def _gen_type_params_from_existing(self,
                                        func: ast.FunctionDeclaration,
-                                       type_var_map
-                                       ) -> (List[tp.TypeParameter], tu.TypeVarMap):
+                                       type_var_map: tu.TypeVarMap
+                                       ) -> tuple[list[tp.TypeParameter], tu.TypeVarMap]:
         """Gen type parameters for a function that overrides a parameterized
             function.
 
@@ -976,10 +1004,11 @@ class Generator():
             new_type_params.append(new_type_param)
         return new_type_params, substituted_type_params
 
-    def gen_field_decl(self, etype=None,
-                       class_is_final=True,
-                       add_to_parent=True, declared_as_override=False,
-                       visibility=None) -> ast.FieldDeclaration:
+    def gen_field_decl(self, etype: tp.Type | None = None,
+                       class_is_final: bool = True,
+                       add_to_parent: bool = True,
+                       declared_as_override: bool = False,
+                       visibility: ast.Visibility | None = None) -> ast.FieldDeclaration:
         """Generate a class Field Declaration.
 
         Args:
@@ -1012,7 +1041,8 @@ class Generator():
                     # In Kotlin all override fields are open, unless final is written
                         (declared_as_override and ut.random.bool(1 - cfg.prob.class_fields_modality.override_final)) or
                         # In Kotlin all ordinary fields are final, unless open is written
-                        (not declared_as_override and ut.random.bool(1 - cfg.prob.class_fields_modality.declaration_final))
+                        (not declared_as_override and ut.random.bool(
+                            1 - cfg.prob.class_fields_modality.declaration_final))
                 )
         )
 
@@ -1026,9 +1056,9 @@ class Generator():
         return field
 
     def gen_variable_decl(self,
-                          etype=None,
-                          only_leaves=False,
-                          expr=None) -> ast.VariableDeclaration:
+                          etype: tp.Type | None = None,
+                          only_leaves: bool = False,
+                          expr: ast.Expr | None = None) -> ast.VariableDeclaration:
         """Generate a Variable Declaration.
 
         Args:
@@ -1064,7 +1094,8 @@ class Generator():
 
     ##### Expressions #####
 
-    def _get_class_attributes(self, class_decl, attr_name):
+    def _get_class_attributes(self, class_decl: ast.ClassDeclaration,
+                              attr_name: str) -> list[gu.AttributeDeclaration]:
         class_decls = self.context.get_classes(self.namespace).values()
         attributes = []
         if attr_name == 'functions':
@@ -1076,31 +1107,35 @@ class Generator():
                 if getattr(attr, 'visibility').resolve() != ast.Visibilities.PRIVATE]
 
     ## PUBLIC API CHECKERS ##
-    def _call_site_visibility_allowed_by_public_api_inline_checkers(self, decl):
+    def _call_site_visibility_allowed_by_public_api_inline_checkers(
+            self, decl: ast.Declaration) -> bool:
         if self.context.has_call_context(PublicApiInlineBody):
             if not getattr(decl, 'visibility', ast.Visibilities.PUBLIC).resolve().is_public_api:
                 return False
         return True
 
     ## INLINE CYCLE CHECKERS ##
-    def _current_inline_source(self):
-        """Return the CallNode tuple (func, location) of the nearest enclosing
-        inline source, or None.
+    def _current_inline_source(self) -> tuple[
+            ast.FunctionDeclaration, str | IrFunctionBodyStub
+    ] | None:
+        """Return the nearest enclosing inline call node (func, location), if any.
         """
         source = self.context.current_call_context(InliningSource)
         return source.node if source is not None else None
 
-    def _requires_inline_edge(self, callee):
+    def _requires_inline_edge(self, callee: ast.FunctionDeclaration) -> bool:
         return (
                 self._current_inline_source() is not None and
                 isinstance(callee, ast.FunctionDeclaration) and
                 callee.is_inline
         )
 
-    def _inline_edge_allowed(self, callee, target_param_name = None):
+    def _inline_edge_allowed(self, callee: ast.FunctionDeclaration,
+                             target_param_name: str | None = None) -> bool:
         if not self._requires_inline_edge(callee):
             return True
         source = self._current_inline_source()
+        assert source is not None
         source_func = source[0]
         # RECURSION_IN_INLINE (Frontend)
         if source_func is callee:
@@ -1109,17 +1144,19 @@ class Generator():
         target = (callee, target_location)
         return self.inline_call_graph.can_add_edge(source, target)
 
-    def _record_inline_edge(self, callee, target_param_name = None):
+    def _record_inline_edge(self, callee: ast.FunctionDeclaration,
+                            target_param_name: str | None = None) -> None:
         if not self._requires_inline_edge(callee):
             return
         source = self._current_inline_source()
+        assert source is not None
         target_location = target_param_name if target_param_name is not None else IrFunctionBodyStub()
         target = (callee, target_location)
         assert self.inline_call_graph.add_edge(source, target)
 
     ## CHECKERS FROM EXTENDING GENERATION CAPABILITIES ##
-    #TODO: Lambdas must be considered separately, they have complex interactions with local context
-    def _var_decls_allowed(self):
+    # TODO: Lambdas must be considered separately, they have complex interactions with local context
+    def _var_decls_allowed(self) -> bool:
         """Whether new variable declarations may be created here.
 
         Prohibits creation of variable declaration hoists in default value expressions
@@ -1146,16 +1183,14 @@ class Generator():
             return False
         return self.context.get_decl(ast.GLOBAL_NAMESPACE, name) is decl
 
-
-
     # This function respects call sites, and when generate_expr tries to redo generation on failure, it doesn't add new ExprCallSites
     def generate_expr(self,
-                      expr_type: tp.Type=None,
-                      only_leaves=False,
-                      subtype=True,
-                      exclude_var=False,
-                      gen_bottom=False,
-                      sam_coercion=False) -> ast.Expr:
+                      expr_type: tp.Type | None = None,
+                      only_leaves: bool = False,
+                      subtype: bool = True,
+                      exclude_var: bool = False,
+                      gen_bottom: bool = False,
+                      sam_coercion: bool = False) -> ast.Expr:
         """Generate an expression.
 
         This function could produce new nodes external to the generated
@@ -1191,12 +1226,12 @@ class Generator():
         return expr
 
     def _generate_expr(self,
-                       expr_type: tp.Type=None,
-                       only_leaves=False,
-                       subtype=True,
-                       exclude_var=False,
-                       gen_bottom=False,
-                       sam_coercion=False) -> ast.Expr:
+                       expr_type: tp.Type | None = None,
+                       only_leaves: bool = False,
+                       subtype: bool = True,
+                       exclude_var: bool = False,
+                       gen_bottom: bool = False,
+                       sam_coercion: bool = False) -> ast.Expr:
         """Generate an expression.
 
         This function could produce new nodes external to the generated
@@ -1254,8 +1289,8 @@ class Generator():
     # pylint: disable=unused-argument
     def gen_assignment(self,
                        expr_type: tp.Type,
-                       only_leaves=False,
-                       subtype=True) -> ast.Assignment:
+                       only_leaves: bool = False,
+                       subtype: bool = True) -> ast.Assignment:
         """Generate an assignment expressions.
 
         Args:
@@ -1302,11 +1337,13 @@ class Generator():
         )
         return ast.Assignment(variable.name, self.generate_expr(
             variable.get_type(), only_leaves, subtype, gen_bottom=gen_bottom),
-                              receiver=receiver,)
+                              receiver=receiver)
 
     # Where
 
-    def _get_assignable_vars(self) -> List[ast.Variable]:
+    def _get_assignable_vars(
+            self) -> list[tuple[ast.Expr | None,
+                                ast.VariableDeclaration | ast.FieldDeclaration]]:
         """Get all non-final variables in context.
 
         Note that variables inside lambdas in Java should be either final, or
@@ -1356,7 +1393,8 @@ class Generator():
 
     # And
 
-    def _get_classes_with_assignable_fields(self):
+    def _get_classes_with_assignable_fields(
+            self) -> tuple[tp.Type, ast.FieldDeclaration] | None:
         """Get classes with non-final fields.
 
         Returns:
@@ -1401,8 +1439,8 @@ class Generator():
 
     def gen_field_access(self,
                          etype: tp.Type,
-                         only_leaves=False,
-                         subtype=True) -> ast.FieldAccess:
+                         only_leaves: bool = False,
+                         subtype: bool = True) -> ast.FieldAccess:
         """Generate a field access expression.
 
         Args:
@@ -1431,8 +1469,8 @@ class Generator():
 
     def gen_variable(self,
                      etype: tp.Type,
-                     only_leaves=False,
-                     subtype=True) -> ast.Variable:
+                     only_leaves: bool = False,
+                     subtype: bool = True) -> ast.Variable:
         """Generate a variable.
 
         First, it searches for all variables in the scope. In case it doesn't
@@ -1457,7 +1495,7 @@ class Generator():
         variables = [
             v for v in variables
             if self._call_site_visibility_allowed_by_public_api_inline_checkers(v)
-            and self._allowed_by_explicit_imports_only_in_generation_paths_checker(v)
+               and self._allowed_by_explicit_imports_only_in_generation_paths_checker(v)
         ]
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
@@ -1501,8 +1539,8 @@ class Generator():
 
     def gen_array_expr(self,
                        expr_type: tp.Type,
-                       only_leaves=False,
-                       subtype=True) -> ast.ArrayExpr:
+                       only_leaves: bool = False,
+                       subtype: bool = True) -> ast.ArrayExpr:
         """Generate an array expression
 
         Args:
@@ -1523,8 +1561,8 @@ class Generator():
 
     # pylint: disable=unused-argument
     def gen_equality_expr(self,
-                          expr_type=None,
-                          only_leaves=False) -> ast.EqualityExpr:
+                          expr_type: tp.Type,
+                          only_leaves: bool = False) -> ast.EqualityExpr:
         """Generate an equality expression
 
         It generates two additional expression for performing the comparison
@@ -1546,8 +1584,8 @@ class Generator():
 
     # pylint: disable=unused-argument
     def gen_logical_expr(self,
-                         expr_type=None,
-                         only_leaves=False) -> ast.LogicalExpr:
+                         expr_type: tp.Type,
+                         only_leaves: bool = False) -> ast.LogicalExpr:
         """Generate a logical expression
 
         It generates two additional expression for the logical expression.
@@ -1568,8 +1606,9 @@ class Generator():
 
     # pylint: disable=unused-argument
     def gen_comparison_expr(self,
-                            expr_type=None,
-                            only_leaves=False) -> ast.ComparisonExpr:
+                            expr_type: tp.Type,
+                            only_leaves: bool = False
+                            ) -> ast.ComparisonExpr | ast.EqualityExpr:
         """Generate a comparison expression
 
         It generates two additional expression for performing the comparison
@@ -1630,8 +1669,8 @@ class Generator():
 
     def gen_conditional(self,
                         etype: tp.Type,
-                        only_leaves=False,
-                        subtype=True) -> ast.Conditional:
+                        only_leaves: bool = False,
+                        subtype: bool = True) -> ast.Conditional:
         """Generate a conditional expression.
 
         It generates 3 sub expressions, one for each branch, and one for
@@ -1686,8 +1725,8 @@ class Generator():
 
     def gen_is_expr(self,
                     expr_type: tp.Type,
-                    only_leaves=False,
-                    subtype=True) -> ast.Conditional:
+                    only_leaves: bool = False,
+                    subtype: bool = True) -> ast.Conditional:
         """Generate an is expression.
 
         If it cannot detect a subtype for the expr_type, then it just generates
@@ -1702,7 +1741,8 @@ class Generator():
         Returns:
             A conditional with is.
         """
-        def _get_extra_decls(namespace):
+
+        def _get_extra_decls(namespace: NamespacePath) -> list[ast.Declaration]:
             return [
                 v
                 for v in self.context.get_declarations(
@@ -1715,10 +1755,10 @@ class Generator():
             v
             for v in self.context.get_vars(self.namespace).values()
             if (
-                self._allowed_by_explicit_imports_only_in_generation_paths_checker(v) and
-                # We can smart cast local variables that are final, have
-                # explicit types, and are not overridable.
-                # Inline param is never here, as it is ast.ParameterDeclaration
+                    self._allowed_by_explicit_imports_only_in_generation_paths_checker(v) and
+                    # We can smart cast local variables that are final, have
+                    # explicit types, and are not overridable.
+                    # Inline param is never here, as it is ast.ParameterDeclaration
                     isinstance(v, ast.VariableDeclaration) and
                     getattr(v, 'is_final', True) and
                     not v.is_type_inferred and
@@ -1782,7 +1822,8 @@ class Generator():
 
     # Where
 
-    def _filter_subtypes(self, subtypes, initial_type):
+    def _filter_subtypes(self, subtypes: list[tp.Type],
+                         initial_type: tp.Type) -> list[tp.Type]:
         """Filter out types that cannot be smart casted.
 
         The types that cannot be smart casted are Type Variables and
@@ -1818,10 +1859,10 @@ class Generator():
         return new_subtypes
 
     def gen_lambda(self,
-                   etype: tp.Type=None,
-                   not_void=False,
-                   params: List[ast.ParameterDeclaration]=None,
-                   only_leaves=False
+                   etype: tp.Type | None = None,
+                   not_void: bool = False,
+                   params: list[ast.ParameterDeclaration] | None = None,
+                   only_leaves: bool = False
                    ) -> ast.Lambda:
         """Generate a lambda expression.
 
@@ -1869,8 +1910,8 @@ class Generator():
 
     def gen_func_call(self,
                       etype: tp.Type,
-                      only_leaves=False,
-                      subtype=True) -> ast.FunctionCall:
+                      only_leaves: bool = False,
+                      subtype: bool = True) -> ast.FunctionCall:
         """Generate a function call.
 
         The function call could be either a normal function call, or a function
@@ -1898,8 +1939,8 @@ class Generator():
 
     def _gen_func_call(self,
                        etype: tp.Type,
-                       only_leaves=False,
-                       subtype=True) -> ast.FunctionCall:
+                       only_leaves: bool = False,
+                       subtype: bool = True) -> ast.FunctionCall:
         """Generate a function call.
 
         Args:
@@ -1913,7 +1954,7 @@ class Generator():
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
             type_fun = self._get_matching_class(etype, subtype=subtype,
-                                              attr_name='functions')
+                                                attr_name='functions')
             if type_fun is None:
                 msg = "No compatible classes for type {}"
                 log(self.logger, msg.format(etype))
@@ -1976,7 +2017,7 @@ class Generator():
                         finally:
                             self.context.pop_call_context()
                         args.append(ast.CallArgument(arg, name=param.name))
-                    named_arguments_started = True # default omitted, or one named was already emitted
+                    named_arguments_started = True  # default omitted, or one named was already emitted
                 else:
                     self.context.push_call_context(FunctionCallParamGeneration(func, param))
                     try:
@@ -1984,7 +2025,7 @@ class Generator():
                                                  gen_bottom=gen_bottom)
                     finally:
                         self.context.pop_call_context()
-                    args.append(ast.CallArgument(arg, name= param.name if named_arguments_started else None))
+                    args.append(ast.CallArgument(arg, name=param.name if named_arguments_started else None))
 
             else:
                 # This param is a vararg, so provide a random number of
@@ -2011,8 +2052,8 @@ class Generator():
 
     def _gen_func_call_ref(self,
                            etype: tp.Type,
-                           only_leaves=False,
-                           subtype=False) -> ast.FunctionCall:
+                           only_leaves: bool = False,
+                           subtype: bool = False) -> ast.FunctionCall | None:
         """Generate a function call from a reference.
 
         This function searches for variables and receivers in current scope.
@@ -2087,9 +2128,10 @@ class Generator():
     # pylint: disable=unused-argument
     def gen_new(self,
                 etype: tp.Type,
-                only_leaves=False,
-                subtype=True,
-                sam_coercion=False) -> ast.New:
+                only_leaves: bool = False,
+                subtype: bool = True,
+                sam_coercion: bool = False
+                ) -> ast.New | CallableValueExpr | ast.BottomConstant:
         """Create a new object of a given type.
 
         This could be:
@@ -2196,7 +2238,7 @@ class Generator():
 
     def _get_subclass(self,
                       etype: tp.Type,
-                      subtype=True) -> ast.ClassDeclaration:
+                      subtype: bool = True) -> ast.ClassDeclaration | None:
         """"Find a subclass that is a subtype of the given type and is a
         regular class.
 
@@ -2231,7 +2273,9 @@ class Generator():
 
     # And
 
-    def _gen_func_ref_lambda(self, etype:tp.Type, only_leaves=False):
+    def _gen_func_ref_lambda(self, etype: tp.ParameterizedType,
+                             only_leaves: bool = False
+                             ) -> CallableValueExpr:
         """Generate a function reference or a lambda for a given signature.
 
         Args:
@@ -2254,7 +2298,7 @@ class Generator():
     # Where
 
     def _gen_func_ref(self, etype: tp.Type,
-                      only_leaves=False) -> List[ast.FunctionReference]:
+                      only_leaves: bool = False) -> ast.FunctionReference | None:
         """Generate a function reference.
 
         1. Functions in current scope and global scope, or methods that have
@@ -2325,7 +2369,7 @@ class Generator():
                        only_leaves: bool,
                        subtype: bool,
                        exclude_var: bool,
-                       sam_coercion=False) -> List[Callable]:
+                       sam_coercion: bool = False) -> list[ExpressionGenerator]:
         """Get candidate generators for the given type.
 
         Args:
@@ -2341,10 +2385,11 @@ class Generator():
         Returns:
             A list of generator functions
         """
-        def gen_variable(etype):
+
+        def gen_variable(etype: tp.Type) -> ast.Variable:
             return self.gen_variable(etype, only_leaves, subtype)
 
-        def gen_fun_call(etype):
+        def gen_fun_call(etype: tp.Type) -> ast.FunctionCall:
             return self.gen_func_call(etype, only_leaves=only_leaves,
                                       subtype=subtype)
 
@@ -2373,8 +2418,8 @@ class Generator():
         binary_ops = {
             self.bt_factory.get_boolean_type(): [
                 lambda x: self.gen_logical_expr(x, only_leaves),
-                lambda x: self.gen_equality_expr(only_leaves),
-                lambda x: self.gen_comparison_expr(only_leaves)
+                lambda x: self.gen_equality_expr(x, only_leaves),
+                lambda x: self.gen_comparison_expr(x, only_leaves)
             ],
         }
         other_candidates = [
@@ -2389,7 +2434,7 @@ class Generator():
 
         if expr_type == self.bt_factory.get_void_type():
             # The assignment operator in Java evaluates to the assigned value.
-            #if self.language == 'java':
+            # if self.language == 'java':
             #    return [gen_fun_call]
             if not self._var_decls_allowed():
                 # gen_assignment's last fallback declares a 'var' when nothing assignable is in scope
@@ -2422,12 +2467,12 @@ class Generator():
         return other_candidates + candidates
 
     def get_types(self,
-                  ret_types=True,
-                  exclude_arrays=False,
-                  exclude_covariants=False,
-                  exclude_contravariants=False,
-                  exclude_type_vars=False,
-                  exclude_function_types=False) -> List[tp.Type]:
+                  ret_types: bool = True,
+                  exclude_arrays: bool = False,
+                  exclude_covariants: bool = False,
+                  exclude_contravariants: bool = False,
+                  exclude_type_vars: bool = False,
+                  exclude_function_types: bool = False) -> list[tp.Type]:
         """Get all available types.
 
         Including user-defined types, built-ins, and function types.
@@ -2476,11 +2521,11 @@ class Generator():
         return usr_types + builtins + self.function_types
 
     def select_type(self,
-                    ret_types=True,
-                    exclude_arrays=False,
-                    exclude_covariants=False,
-                    exclude_contravariants=False,
-                    exclude_function_types=False) -> tp.Type:
+                    ret_types: bool = True,
+                    exclude_arrays: bool = False,
+                    exclude_covariants: bool = False,
+                    exclude_contravariants: bool = False,
+                    exclude_function_types: bool = False) -> tp.Type:
         """Select a type from the all available types.
 
         It will always instantiating type constructors to parameterized types.
@@ -2520,11 +2565,11 @@ class Generator():
         return stype
 
     def gen_type_params(self,
-                        count: int=None,
-                        with_variance=False,
-                        blacklist: List[str]=None,
-                        for_function=False,
-                        for_inline_function=False) -> List[tp.TypeParameter]:
+                        count: int | None = None,
+                        with_variance: bool = False,
+                        blacklist: list[str] | None = None,
+                        for_function: bool = False,
+                        for_inline_function: bool = False) -> list[tp.TypeParameter]:
         """Generate a list containing type parameters
 
         Args:
@@ -2576,16 +2621,16 @@ class Generator():
 
     ### Internal helper functions ###
 
-    def _get_type_variable_names(self) -> List[str]:
+    def _get_type_variable_names(self) -> list[str]:
         """Get the name of type variables that are in place in the current
         namespace.
         """
         return list(self.context.get_types(self.namespace).keys())
 
     def _get_func_ret_type(self,
-                           params: List[ast.ParameterDeclaration],
-                           etype: tp.Type,
-                           not_void=False) -> tp.Type:
+                           params: list[ast.ParameterDeclaration],
+                           etype: tp.Type | None,
+                           not_void: bool = False) -> tp.Type:
         """Get return type for a function or lambda.
 
         Args:
@@ -2604,7 +2649,7 @@ class Generator():
 
     def _get_class(self,
                    etype: tp.Type
-                   ) -> Tuple[ast.ClassDeclaration, tu.TypeVarMap]:
+                   ) -> tuple[ast.ClassDeclaration, tu.TypeVarMap] | None:
         """Find the class declaration for a given type.
         """
         # Get class declaration based on the given type.
@@ -2626,8 +2671,10 @@ class Generator():
                 return c, type_var_map
         return None
 
-    def _classify_receiver(self, receiver_t: tp.Type,
-                           callee: ast.FunctionDeclaration):
+    def _classify_receiver(
+            self, receiver_t: tp.Type | None,
+            callee: ast.FunctionDeclaration
+    ) -> _ReceiverClassification:
         """Classify a fresh receiver for the inline cycle detection X dispatch interactions."""
         if receiver_t is None:
             return _ReceiverClassification.NOT_RECEIVER
@@ -2652,7 +2699,8 @@ class Generator():
 
         return _ReceiverClassification.CANT_DISPROVE_FINAL
 
-    def _gen_fresh_receiver(self, type_fun, only_leaves=False):
+    def _gen_fresh_receiver(self, type_fun: gu.AttrAccessInfo,
+                            only_leaves: bool = False) -> ast.Expr | None:
         """Generate the receiver used by the fresh-callee fallback."""
         receiver_t = type_fun.receiver_t
         if self.language != 'kotlin':
@@ -2692,7 +2740,9 @@ class Generator():
             return receiver
         return ast.EnforceTypeViaCast(receiver, receiver_t)
 
-    def _get_var_type_to_search(self, var_type: tp.Type) -> tp.TypeParameter:
+    def _get_var_type_to_search(
+            self, var_type: tp.Type
+    ) -> tp.Object | tp.ParameterizedType | None:
         """Get the type that we want to search for.
 
         We exclude:
@@ -2716,9 +2766,11 @@ class Generator():
                     isinstance(bound, tp.TypeParameter)):
                 return None
             var_type = bound
+        assert isinstance(var_type, (tp.Object, tp.ParameterizedType))
         return var_type
 
-    def _get_vars_of_function_types(self, etype: tp.Type):
+    def _get_vars_of_function_types(
+            self, etype: tp.Type) -> list[ast.Variable | ast.FieldAccess]:
         """Get a variable or a field access whose type is a function type.
 
         Args:
@@ -2756,7 +2808,7 @@ class Generator():
 
     # helper generators
 
-    def _gen_func_params(self) -> List[ast.ParameterDeclaration]:
+    def _gen_func_params(self) -> list[ast.ParameterDeclaration]:
         """Generate parameters for a function or for a lambda.
         """
         params = []
@@ -2800,7 +2852,10 @@ class Generator():
             # is an array of something.
             return param.get_type().name == 'Array'
 
-    def _gen_func_body(self, ret_type: tp.Type, func: ast.FunctionDeclaration = None):
+    def _gen_func_body(
+            self, ret_type: tp.Type,
+            func: ast.FunctionDeclaration | None = None
+    ) -> ast.Block | ast.Expr:
         """Generate the body of a function or a lambda.
 
         Args:
@@ -2850,7 +2905,9 @@ class Generator():
 
     # Where
 
-    def _gen_side_effects(self, func: ast.FunctionDeclaration = None) -> Tuple[List[ast.Expr], List[ast.Declaration]]:
+    def _gen_side_effects(
+            self, func: ast.FunctionDeclaration | None = None
+    ) -> tuple[list[ast.Expr], list[ast.Declaration]]:
         """Generate expressions with side-effects for function bodies.
 
         Example side-effects: assignment, variable declaration, etc.
@@ -2867,8 +2924,9 @@ class Generator():
                  if not isinstance(d, ast.ParameterDeclaration)]
         return exprs, decls
 
-    def _gen_ret_and_paramas_from_sig(self, etype, inside_lambda=False) -> \
-            Tuple[tp.Type, ast.ParameterDeclaration]:
+    def _gen_ret_and_paramas_from_sig(
+            self, etype: tp.ParameterizedType, inside_lambda: bool = False
+    ) -> tuple[tp.Type, list[ast.ParameterDeclaration]]:
         """Generate parameters from signature and return them along with return
         type.
 
@@ -2893,7 +2951,7 @@ class Generator():
                               attr_name: str,
                               func_ref: bool = False,
                               signature: bool = False
-                              ) -> List[gu.AttrReceiverInfo]:
+                              ) -> list[gu.AttrReceiverInfo]:
         """Get objects that have an attribute of attr_name that is/return etype.
 
         This function essentially searches for variables containing objects
@@ -3032,7 +3090,9 @@ class Generator():
                         type_map_var, attr, None))
         return decls
 
-    def _get_matching_object_receiver(self, name, original_type, search_type):
+    def _get_matching_object_receiver(
+            self, name: str, original_type: tp.Type, search_type: tp.Type
+    ) -> ast.Variable | ast.EnforceTypeViaCast:
         """Return an object receiver with the member-search type in Kotlin.
 
         A bounded type parameter is searched through its concrete bound, but
@@ -3049,8 +3109,8 @@ class Generator():
     def _get_matching_function_declarations(self,
                                             etype: tp.Type,
                                             subtype: bool,
-                                            signature=False
-                                            ) -> List[gu.AttrReceiverInfo]:
+                                            signature: bool = False
+                                            ) -> list[gu.AttrReceiverInfo]:
         """Get all available function declarations.
 
         This function searches functions in the current scope that return
@@ -3142,7 +3202,8 @@ class Generator():
             self.depth = initial_depth
 
     @contextmanager
-    def _isolated_generation(self, starting_namespace = ast.GLOBAL_NAMESPACE):
+    def _isolated_generation(self, starting_namespace: NamespacePath =
+    ast.GLOBAL_NAMESPACE):
         initial_inside_inline = self._inside_inline_function
         initial_namespace = self.namespace
         self._inside_inline_function = False
@@ -3156,9 +3217,9 @@ class Generator():
 
     def _gen_matching_func(self,
                            etype: tp.Type,
-                           not_void=False,
-                           signature=False
-                           ) -> gu.AttrAccessInfo:
+                           not_void: bool = False,
+                           signature: bool = False
+                           ) -> gu.AttrAccessInfo | None:
         """ Generate a function or a class containing a function whose return
         type is 'etype'.
 
@@ -3210,7 +3271,7 @@ class Generator():
             # so that the type parameter is accessible.
             self.namespace = ut.random.r.choices(
                 population=[
-                    self.namespace, # local function
+                    self.namespace,  # local function
                     ast.GLOBAL_NAMESPACE,
                 ],
                 weights=[
@@ -3248,7 +3309,7 @@ class Generator():
                             etype: tp.Type,
                             subtype: bool,
                             attr_name: str,
-                            signature=False) -> gu.AttrAccessInfo:
+                            signature: bool = False) -> gu.AttrAccessInfo | None:
         """Get a class that has an attribute of attr_name that is/return etype.
 
         This function essentially searches for a class that has either a field
@@ -3340,15 +3401,18 @@ class Generator():
         log(self.logger, msg)
         return gu.AttrAccessInfo(cls_type, params_map, attr, func_type_var_map)
 
-    def _is_sigtype_compatible(self, attr, etype, type_var_map,
-                               check_signature, subtype,
-                               get_attr_type=lambda x, y: tp.substitute_type(
-                                   x.get_type(), y)):
+    def _is_sigtype_compatible(
+            self, attr: gu.AttributeDeclaration, etype: tp.Type,
+            type_var_map: tu.TypeVarMap, check_signature: bool, subtype: bool,
+            get_attr_type: Callable[[gu.AttributeDeclaration, tu.TypeVarMap], tp.Type] =
+            lambda x, y: tp.substitute_type(x.get_type(), y)
+    ) -> bool:
         attr_type = get_attr_type(attr, type_var_map)
         if not check_signature:
             if subtype:
                 return attr_type.is_assignable(etype)
             return attr_type == etype
+        assert isinstance(attr, ast.FunctionDeclaration)
         param_types = [
             tp.substitute_type(p.get_type(), type_var_map)
             for p in attr.params
@@ -3358,14 +3422,17 @@ class Generator():
             param_types + [attr_type])
         return etype == sig
 
-    def _is_signature_compatible(self, attr, etype, check_signature,
-                                 subtype):
+    def _is_signature_compatible(
+            self, attr: gu.AttributeDeclaration, etype: tp.Type,
+            check_signature: bool, subtype: bool
+    ) -> tuple[bool, tu.TypeVarMap | None]:
         """
         Checks if the signature of attr is compatible with etype.
         """
         type_var_map = {}
         attr_type = attr.get_type()
         if check_signature:
+            assert isinstance(attr, ast.FunctionDeclaration)
             signature_types = [
                 p.get_type() for p in attr.params
             ]
@@ -3410,10 +3477,12 @@ class Generator():
                                   etype: tp.Type,
                                   subtype: bool,
                                   attr_name: str,
-                                  signature=False
-                                  ) -> List[Tuple[ast.ClassDeclaration,
-    tu.TypeVarMap,
-    ast.Declaration]]:
+                                  signature: bool = False
+                                  ) -> list[tuple[
+        ast.ClassDeclaration,
+        tu.TypeVarMap | None,
+        gu.AttributeDeclaration
+    ]]:
         """Get classes that have attributes of attr_name that are/return etype.
 
         Args:
@@ -3461,11 +3530,12 @@ class Generator():
     def _gen_matching_class(self,
                             etype: tp.Type,
                             attr_name: str,
-                            not_void=False,
-                            signature=False,
-                            required_inline_call_source:
-                            tuple = None
-                            ) -> gu.AttrAccessInfo:
+                            not_void: bool = False,
+                            signature: bool = False,
+                            required_inline_call_source: (
+                                tuple[ast.FunctionDeclaration, str | IrFunctionBodyStub] | None
+                            ) = None
+                            ) -> gu.AttrAccessInfo | None:
         """Generate a class that has an attribute of attr_name that is/return etype.
 
         Args:
@@ -3566,7 +3636,9 @@ class Generator():
 
     # Where
 
-    def _create_type_params_from_etype(self, etype: tp.Type):
+    def _create_type_params_from_etype(
+            self, etype: tp.Type
+    ) -> tuple[list[tp.TypeParameter], tu.TypeVarMap, bool] | list[tp.TypeParameter]:
         """Generate type parameters for a type.
 
         Returns:
@@ -3617,8 +3689,13 @@ class Generator():
             type_var_map[type_var] = type_param
         return type_params, type_var_map, can_wildcard
 
-    def _record_escalation(self, call_stack_semantic, call_stack_debugger, escalated_param_inlining_scope=None, escalated_details=None):
-        escalation_log = {}
+    def _record_escalation(
+            self, call_stack_semantic: tuple[CallContext, ...],
+            call_stack_debugger: tuple[str, ...],
+            escalated_param_inlining_scope: str | None = None,
+            escalated_details: str | None = None
+    ) -> None:
+        escalation_log: EscalationLog = {}
         if escalated_param_inlining_scope is not None:
             escalation_log["escalated_param_inlining_scope"] = escalated_param_inlining_scope
         if escalated_details is not None:
