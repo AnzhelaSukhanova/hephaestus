@@ -2,11 +2,12 @@ from src.ir import types as tp
 from src.ir.visitors import ASTVisitor
 
 
-class BaseTranslator(ASTVisitor):
+class BaseTranslator(ASTVisitor[None, str]):
 
-    def __init__(self, package=None, options={}):
-        self.program = None
-        self.package = package
+    def __init__(self, package: str | None = None,
+                 options: dict[str, str | bool] = {}) -> None:
+        self.program: str | None = None
+        self.package: str | None = package
 
     def result(self) -> str:
         if self.program is None:
@@ -15,7 +16,3 @@ class BaseTranslator(ASTVisitor):
 
     def get_type_name(self, t: tp.Type) -> str:
         raise NotImplementedError('get_type_name() must be implemented')
-
-    def visit_enforce_type_via_cast(self, node):
-        raise NotImplementedError(
-            'EnforceTypeViaCast is only supported by the Kotlin translator')
