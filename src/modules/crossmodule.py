@@ -1,52 +1,93 @@
 import json
 import os
 import shutil
+from collections.abc import Callable, Mapping, Sequence
+from typing import TypedDict
+
+from src.generators.config import GenConfig
+from src.ir import ast
+from src.ir.context import Context
+from src.utils import RandomUtils
+
+
+class LedgerRecord(TypedDict):
+    direct: int | None
+    closure: list[int]
+
+
+class ManifestDiff(TypedDict):
+    manifest_depends: list[str]
+    closure: list[str]
+    unexpected: list[str]
+
+
+class PublicationRecord(LedgerRecord, total=False):
+    manifest_diff: ManifestDiff
+
+
+class KlibMetadata(TypedDict):
+    pid: int
+    command: list[str]
+    compiler_version: str
+    flags: list[str]
+    backend: str
+
+
+class PreparedDependency(TypedDict):
+    pid: int
+    context: Context
+    closure: list[int]
+    klibs: list[str]
 
 
 class CrossModuleManager:
 
-    def __init__(self, test_directory, config, backend, compiler_version,
-                 read_manifest_depends, random_source, load_program):
-        self.test_directory = test_directory
-        self.config = config
-        self.backend = backend
-        self.compiler_version = compiler_version
-        self.read_manifest_depends = read_manifest_depends
-        self.random = random_source
-        self.load_program = load_program
+    def __init__(self, test_directory: str, config: GenConfig,
+                 backend: str, compiler_version: str,
+                 read_manifest_depends: Callable[[str], set[str] | None],
+                 random_source: RandomUtils,
+                 load_program: Callable[[str], ast.Program | None]) -> None:
+        self.test_directory: str = test_directory
+        self.config: GenConfig = config
+        self.backend: str = backend
+        self.compiler_version: str = compiler_version
+        self.read_manifest_depends: Callable[[str], set[str] | None] = read_manifest_depends
+        self.random: RandomUtils = random_source
+        self.load_program: Callable[[str], ast.Program | None] = load_program
 
-    def enabled(self):
+    def enabled(self) -> bool:
         return bool(self.config.prob.crossmodule_probability)
 
-    def ledger_path(self):
+    def ledger_path(self) -> str:
         return os.path.join(self.test_directory, 'crossmodule.json')
 
-    def load_ledger(self):
+    def load_ledger(self) -> dict[str, object]:
         """Load the pid-to-dependency ledger, tolerating its first absence."""
         try:
             with open(self.ledger_path(), 'r') as ledger_file:
-                ledger = json.load(ledger_file)
+                ledger: object = json.load(ledger_file)
         except (OSError, json.JSONDecodeError):
             return {}
         if not isinstance(ledger, dict):
             return {}
         return ledger
 
-    def save_ledger(self, ledger):
+    def save_ledger(self, ledger: Mapping[str, object]) -> None:
         ledger_path = self.ledger_path()
         with open(ledger_path + '.tmp', 'w') as out:
             json.dump(ledger, out, indent=2)
         os.replace(ledger_path + '.tmp', ledger_path)
 
-    def published_klibs_dir(self):
+    def published_klibs_dir(self) -> str:
         return os.path.join(self.test_directory, 'klibs')
 
-    def published_klib_path(self, pid):
+    def published_klib_path(self, pid: int) -> str:
         """Where a published KLIB lives; consumers reference it in place."""
         return os.path.join(self.published_klibs_dir(),
                             'd' + str(pid) + '.klib')
 
-    def publish_klib(self, pid, source_klib, command_args):
+    def publish_klib(self, pid: int, source_klib: str,
+                     command_args: Sequence[str]) -> str | None:
         """Retain a per-node KLIB: it is published once and never rebuilt."""
         if not os.path.exists(source_klib):
             return None
@@ -59,7 +100,7 @@ class CrossModuleManager:
         else:
             shutil.copyfile(source_klib, dst + '.tmp')
             os.replace(dst + '.tmp', dst)
-        meta = {
+        meta: KlibMetadata = {
             'pid': pid,
             'command': list(command_args),
             'compiler_version': self.compiler_version,
@@ -72,7 +113,9 @@ class CrossModuleManager:
         os.replace(meta_path + '.tmp', meta_path)
         return dst
 
-    def manifest_closure_diff(self, klib_path, closure, dropped=None):
+    def manifest_closure_diff(self, klib_path: str, closure: Sequence[int],
+                              dropped: Sequence[int | str] | None = None
+                              ) -> ManifestDiff | None:
         """Compare a KLIB's manifest dependencies against the ledger closure.
 
         Explicitly passed libraries may be listed even when unused. Anything the
@@ -96,16 +139,21 @@ class CrossModuleManager:
         }
 
     @staticmethod
-    def _ledger_record(ledger, pid):
+    def _ledger_record(ledger: Mapping[str, object], pid: int
+                       ) -> dict[str, object]:
         record = ledger.get(str(pid))
         return record if isinstance(record, dict) else {}
 
-    def ledger_closure(self, ledger, pid):
+    def ledger_closure(self, ledger: Mapping[str, object], pid: int) -> list[int]:
         """The pids whose KLIBs a consumer of ``pid`` also has to be handed."""
         closure = self._ledger_record(ledger, pid).get('closure') or []
+        if not isinstance(closure, (list, tuple)):
+            return []
         return [int(item) for item in closure]
 
-    def publication_record(self, direct, ledger=None):
+    def publication_record(self, direct: int | None,
+                           ledger: Mapping[str, object] | None = None
+                           ) -> PublicationRecord:
         """The ledger record of a published program: edge and closure.
 
         The closure is computed once, from the direct dependency's own published
@@ -122,7 +170,7 @@ class CrossModuleManager:
             'closure': closure,
         }
 
-    def provider_candidates(self, pid):
+    def provider_candidates(self, pid: int) -> list[int]:
         """Published programs that may serve as a direct dependency.
 
         Every published program is a candidate, crossmodule ones included: a
@@ -151,7 +199,7 @@ class CrossModuleManager:
             candidates.append(provider_pid)
         return candidates
 
-    def prepare_dependency(self, pid):
+    def prepare_dependency(self, pid: int) -> PreparedDependency | None:
         """Seed a new program from a published dependency.
 
         The dependency is reused exactly as published: its pickle seeds the
@@ -171,7 +219,10 @@ class CrossModuleManager:
             binary = os.path.join(self.test_directory, str(provider_pid),
                                   'program.kt.bin')
             try:
-                context = self.load_program(binary).context
+                program = self.load_program(binary)
+                if program is None:
+                    continue
+                context = program.context
                 context.prepare_this_context_for_import()
             except Exception:
                 # A published program should be complete, but a stale or corrupt
@@ -187,14 +238,15 @@ class CrossModuleManager:
         return None
 
     @staticmethod
-    def _klib_pid(klib_path):
+    def _klib_pid(klib_path: str) -> int | str:
         """The pid a published KLIB belongs to."""
         stem = os.path.splitext(os.path.basename(str(klib_path)))[0]
         if stem.startswith('d') and stem[1:].isdigit():
             return int(stem[1:])
         return stem
 
-    def apply_drop_knob(self, klibs):
+    def apply_drop_knob(self, klibs: Sequence[str]
+                        ) -> tuple[list[str], list[int | str]]:
         """Adversarially withhold indirect dependencies from the compiler.
 
         Each indirect KLIB is dropped independently, and only from the command
@@ -205,7 +257,7 @@ class CrossModuleManager:
         if not prob or len(klibs) < 2:
             return list(klibs), []
         kept = [klibs[0]]
-        dropped = []
+        dropped: list[int | str] = []
         for klib in klibs[1:]:
             if self.random.bool(prob):
                 dropped.append(self._klib_pid(klib))
@@ -214,16 +266,16 @@ class CrossModuleManager:
         return kept, dropped
 
     @staticmethod
-    def dependency_klibs(proc_res):
+    def dependency_klibs(proc_res: list[str] | None) -> list[str]:
         """A program's dependency closure KLIBs, the direct one first."""
-        klibs = proc_res.dep_transitive_closure_klibs
+        klibs = proc_res
         if klibs is None:
             return []
         if isinstance(klibs, (str, os.PathLike)):
             return [str(klibs)]
         return [str(path) for path in klibs]
 
-    def publish_program(self, pid):
+    def publish_program(self, pid: int) -> ast.Program | None:
         """Publish a program's source and pickle, and return the program.
 
         A consumer is seeded from exactly these artifacts, so publication
@@ -247,8 +299,10 @@ class CrossModuleManager:
         except Exception:
             return None
 
-    def publish_provider(self, pid, source_klib, command_args, direct,
-                         dropped=None):
+    def publish_provider(self, pid: int, source_klib: str,
+                         command_args: Sequence[str], direct: int | None,
+                         dropped: Sequence[int | str] | None = None
+                         ) -> PublicationRecord | None:
         """Publish a complete provider and return its ledger record.
 
         A provider can enter the ledger only after both its KLIB and its
