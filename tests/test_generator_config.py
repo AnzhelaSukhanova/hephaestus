@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.generators.config import GenConfig, Probabilities, cfg
+from src.generators.config import Probabilities, cfg
 
 
 ROOT = Path(__file__).parents[1]
@@ -22,8 +22,7 @@ def test_default_generator_config_matches_current_defaults():
 def test_probability_configuration_always_has_crossmodule_probability():
     config = deepcopy(cfg)
 
-    assert GenConfig.__annotations__['prob'] is Probabilities
-    assert isinstance(config.prob, Probabilities)
+    assert type(config.prob) is Probabilities
     assert config.prob.crossmodule_probability == 0.5
 
     config.json_config({
@@ -32,7 +31,7 @@ def test_probability_configuration_always_has_crossmodule_probability():
         },
     })
 
-    assert isinstance(config.prob, Probabilities)
+    assert type(config.prob) is Probabilities
     assert config.prob.crossmodule_probability == 0.25
 
 

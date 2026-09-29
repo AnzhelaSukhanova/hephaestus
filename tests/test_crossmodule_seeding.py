@@ -413,11 +413,32 @@ def test_a_bare_name_may_be_minted_again_by_the_next_module(monkeypatch):
     assert list(ast.Program(context, "kotlin").children()) == [func]
 
 
+def test_non_generic_class_type_resolves_to_its_declaration():
+    context = Context()
+    class_decl = ast.ClassDeclaration("src.d1.Box", [])
+    context.add_class(ast.GLOBAL_NAMESPACE, class_decl.name, class_decl)
+    generator = Generator("kotlin", target_module="src.d2")
+    generator.context = context
+    generator.namespace = ast.GLOBAL_NAMESPACE
+
+    class_type = class_decl.get_type()
+    assert type(class_type) is types.SimpleClassifier
+    assert generator._get_var_type_to_search(class_type) is class_type
+    assert generator._get_class(class_type) == (class_decl, {})
+
+    with pytest.raises(AssertionError):
+        generator._get_var_type_to_search(types.Classifier("src.d1.Unsupported"))
+    with pytest.raises(AssertionError):
+        generator._get_var_type_to_search(
+            types.TypeConstructor("src.d1.Uninstantiated", [
+                types.TypeParameter("T")]))
+
+
 def test_a_whole_program_generates_on_top_of_a_seeded_context():
     ut.random.reset_word_pool()
     ut.random.r.seed(11)
     provider = Generator("kotlin", target_module="src.d1").generate()
-    provider_names = {decl.name for decl in provider.children()}
+    provider_declarations = {decl.name: decl for decl in provider.children()}
 
     context = provider.context
     context.prepare_this_context_for_import()
@@ -428,4 +449,25 @@ def test_a_whole_program_generates_on_top_of_a_seeded_context():
     # Only the consumer's own declarations are emitted, and every one of them
     # belongs to the consumer's package.
     assert all(name.startswith("src.d2.") for name in consumer_names)
-    assert not consumer_names & provider_names
+    assert not consumer_names & provider_declarations.keys()
+
+    referenced_provider_classes = set()
+    nodes = list(consumer.children())
+    while nodes:
+        node = nodes.pop()
+        nodes.extend(node.children())
+        if isinstance(node, (ast.VariableDeclaration, ast.FieldDeclaration,
+                             ast.ParameterDeclaration)):
+            type_name = node.get_type().name
+            if type_name in provider_declarations:
+                declaration = provider_declarations[type_name]
+                assert isinstance(declaration, ast.ClassDeclaration)
+                assert context.get_decl(ast.GLOBAL_NAMESPACE, type_name) is declaration
+                referenced_provider_classes.add(type_name)
+        if isinstance(node, (ast.Variable, ast.Assignment)) and (
+                node.name in provider_declarations):
+            declaration = provider_declarations[node.name]
+            assert isinstance(declaration, ast.VariableDeclaration)
+            assert context.get_decl(ast.GLOBAL_NAMESPACE, node.name) is declaration
+
+    assert referenced_provider_classes
