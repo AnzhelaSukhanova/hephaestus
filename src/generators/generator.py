@@ -1526,14 +1526,12 @@ class Generator:
             if not valid_usage_of_inline_param:
                 # Escalate inline param to prevent compiler error
                 if self.record_escalations:
-                    print("inline escalated:", debug_param_str, "(call_context)", self.context.call_context_tail(2), ", (debugger)", call_stack_tail(6))
                     self._record_escalation(
                         call_stack_semantic=self.context.call_context_tail(2),
                         call_stack_debugger=call_stack_tail(6),
                         escalated_param_inlining_scope=None if not debug_param_str else self.context._subtree_call_stack[-2].target_param.inlining_scope.name,
                         escalated_details=None if not debug_param_str else str(self.context._subtree_call_stack[-2].target_param.get_type())
                     )
-                    called_by_suffix("_gen_func_call", "generate_expr", "_generate_expr", 'gen_variable', 'gen_variable')
                 self._escalate_inline_param(param=varia)
         return ast.Variable(varia.name)
 
@@ -2742,7 +2740,7 @@ class Generator:
 
     def _get_var_type_to_search(
             self, var_type: tp.Type
-    ) -> tp.Object | tp.ParameterizedType | None:
+    ) -> tp.Object | tp.SimpleClassifier | tp.ParameterizedType | None:
         """Get the type that we want to search for.
 
         We exclude:
@@ -2766,7 +2764,8 @@ class Generator:
                     isinstance(bound, tp.TypeParameter)):
                 return None
             var_type = bound
-        assert isinstance(var_type, (tp.Object, tp.ParameterizedType))
+        assert isinstance(var_type, (tp.Object, tp.SimpleClassifier,
+                                     tp.ParameterizedType))
         return var_type
 
     def _get_vars_of_function_types(
