@@ -1,14 +1,21 @@
 # pylint: disable=protected-access,too-many-instance-attributes,too-many-locals
 # pylint: disable=too-many-statements
+from __future__ import annotations
+
 import re
 from collections import OrderedDict
+from collections.abc import Callable, Collection
 
 from src.ir import ast, groovy_types as gt, types as tp, type_utils as tu
+from src.ir.context import Context, NamespacePath
+from src.ir.node import Node
 from src.transformations.base import change_namespace
 from src.translators.base import BaseTranslator
 
 
-def append_to(visit):
+def append_to[NodeType: Node](
+        visit: Callable[[GroovyTranslator, NodeType], str]
+) -> Callable[[GroovyTranslator, NodeType], None]:
     """There are three scenarios:
 
     1. The node is the main function => set _main_method
@@ -18,7 +25,7 @@ def append_to(visit):
 
     We also use this function to set _nodes_stack
     """
-    def inner(self, node):
+    def inner(self: GroovyTranslator, node: NodeType) -> None:
         self._nodes_stack.append(node)
         res = visit(self, node)
         self._nodes_stack.pop()
@@ -44,44 +51,44 @@ class GroovyTranslator(BaseTranslator):
     executable = "Main.jar"
     ident_value = " "
 
-    def __init__(self, package=None,
-                 options={}):
+    def __init__(self, package: str | None = None,
+                 options: dict[str, str | bool] = {}) -> None:
         super().__init__(package, options)
-        self.types = []
-        self._children_res = []
-        self.ident = 0
-        self.is_unit = False
-        self.context = None
-        self._cast_number = False
+        self.types: list[tp.Type] = []
+        self._children_res: list[str] = []
+        self.ident: int = 0
+        self.is_unit: bool = False
+        self.context: Context | None = None
+        self._cast_number: bool = False
 
-        self._namespace: tuple = ast.GLOBAL_NAMESPACE
+        self._namespace: NamespacePath = ast.GLOBAL_NAMESPACE
         # We have to add all non-class declarations top-level declarations
         # into a Main static class. Moreover, they should be static and get
         # accessed with `Main.` prefix.
-        self._main_children = []
+        self._main_children: list[str] = []
         # main method should be declared public static void, it should be the
         # last element of Main's block.
-        self._main_method = ""
+        self._main_method: str = ""
 
         # We need the following state vars to support blocks inside conditions.
         # In groovy the `{ ... }` is a closure. Hence, if we have a Block
         # inside a condition it means we have a closure, thus we must call it
         # immediately `()`.
-        self._inside_is = False
-        self._inside_is_function = False
-        self.always_cast_numbers = options.get('cast_numbers', False)
+        self._inside_is: bool = False
+        self._inside_is_function: bool = False
+        self.always_cast_numbers: str | bool = options.get('cast_numbers', False)
 
         # FIXME remove this option when they fix the bugs
-        self.always_cast_ftypes = True
+        self.always_cast_ftypes: bool = True
 
         # A set of numbers where numbers is the number of type parameters that
         # an interface for a function should have.
         # TODO pass it as option, or produce the list during the AST traverse
-        self._function_interfaces = {0,1,2,3}
+        self._function_interfaces: set[int] = {0,1,2,3}
 
-        self._nodes_stack = [None]
+        self._nodes_stack: list[Node | None] = [None]
 
-    def _reset_state(self):
+    def _reset_state(self) -> None:
         # Clear the state
         self.types = []
         self._main_method = ""
@@ -97,20 +104,20 @@ class GroovyTranslator(BaseTranslator):
         self._function_interfaces = {0,1,2,3}
         self._nodes_stack = [None]
 
-    def get_ident(self, extra=0, old_ident=None):
+    def get_ident(self, extra: int = 0, old_ident: int | None = None) -> str:
         if old_ident:
             return old_ident * self.ident_value
         return (self.ident + extra) * self.ident_value
 
     @staticmethod
-    def get_filename():
+    def get_filename() -> str:
         return GroovyTranslator.filename
 
     @staticmethod
-    def get_incorrect_filename():
+    def get_incorrect_filename() -> str:
         return GroovyTranslator.incorrect_filename
 
-    def type_arg2str(self, t_arg):
+    def type_arg2str(self, t_arg: tp.Type) -> str:
         if not isinstance(t_arg, tp.WildCardType):
             return self.get_type_name(t_arg)
         if t_arg.variance == tp.Invariant:
@@ -120,7 +127,7 @@ class GroovyTranslator(BaseTranslator):
         else:
             return "? super " + self.get_type_name(t_arg.bound)
 
-    def get_type_name(self, t):
+    def get_type_name(self, t: tp.Type) -> str:
         if t.is_wildcard():
             t = t.get_bound_rec()
             return self.get_type_name(t)
@@ -132,7 +139,7 @@ class GroovyTranslator(BaseTranslator):
         return "{}<{}>".format(t.name, ", ".join([self.type_arg2str(ta)
                                                   for ta in t.type_args]))
 
-    def pop_children_res(self, children):
+    def pop_children_res(self, children: Collection[Node]) -> list[str]:
         len_c = len(children)
         if not len_c:
             return []
@@ -147,7 +154,7 @@ class GroovyTranslator(BaseTranslator):
             return "Main."
         return ""
 
-    def _get_functional_interfaces(self):
+    def _get_functional_interfaces(self) -> str:
         """It produces the required functional interfaces.
         For each number x in _function_interfaces it creates FunctionX+1.
         The last type argument is used for the return type.
@@ -174,7 +181,7 @@ class GroovyTranslator(BaseTranslator):
         # The second node is the parent node
         return isinstance(self._nodes_stack[-2], ast.FunctionReference)
 
-    def visit_program(self, node):
+    def visit_program(self, node: ast.Program) -> None:
         self.types = node.get_types()
         self.context = node.context
         children = node.children()
@@ -204,7 +211,7 @@ class GroovyTranslator(BaseTranslator):
         self._reset_state()
 
     @append_to
-    def visit_block(self, node):
+    def visit_block(self, node: ast.Block) -> str:
         children = node.children()
         children_len = len(children)
         for i, c in enumerate(children):
@@ -237,12 +244,12 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_super_instantiation(self, node):
+    def visit_super_instantiation(self, node: ast.SuperClassInstantiation) -> str:
         return self.get_type_name(node.class_type)
 
     @append_to
     @change_namespace
-    def visit_class_decl(self, node):
+    def visit_class_decl(self, node: ast.ClassDeclaration) -> str:
         def get_superclasses_interfaces():
             # In correct programs len(superclasses) must be at most 1.
             superclasses = []
@@ -357,7 +364,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_type_param(self, node):
+    def visit_type_param(self, node: tp.TypeParameter) -> str:
         return "{name}{bound}".format(
             name=node.name,
             bound=' extends ' + self.get_type_name(node.bound)
@@ -365,7 +372,7 @@ class GroovyTranslator(BaseTranslator):
         )
 
     @append_to
-    def visit_var_decl(self, node):
+    def visit_var_decl(self, node: ast.VariableDeclaration) -> str:
         prev_cast_number = self._cast_number
         self._cast_number = not bool(node.var_type)
         children = node.children()
@@ -393,7 +400,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_call_argument(self, node):
+    def visit_call_argument(self, node: ast.CallArgument) -> str:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -404,7 +411,7 @@ class GroovyTranslator(BaseTranslator):
         return children_res[0]
 
     @append_to
-    def visit_field_decl(self, node):
+    def visit_field_decl(self, node: ast.FieldDeclaration) -> str:
         return "public {final}{field_type} {name}".format(
             final="final " if node.is_immutable else "",
             field_type=self.get_type_name(node.field_type),
@@ -412,7 +419,7 @@ class GroovyTranslator(BaseTranslator):
         )
 
     @append_to
-    def visit_param_decl(self, node):
+    def visit_param_decl(self, node: ast.ParameterDeclaration) -> str:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -435,7 +442,7 @@ class GroovyTranslator(BaseTranslator):
 
     @append_to
     @change_namespace
-    def visit_func_decl(self, node):
+    def visit_func_decl(self, node: ast.FunctionDeclaration) -> str:
         def is_closure():
             """Return true if we need to declare the function as closure.
 
@@ -530,7 +537,7 @@ class GroovyTranslator(BaseTranslator):
 
     @append_to
     @change_namespace
-    def visit_lambda(self, node):
+    def visit_lambda(self, node: ast.Lambda) -> str:
         old_ident = self.ident
         if (self._namespace[-2],) == ast.GLOBAL_NAMESPACE:
             old_ident += 2
@@ -571,7 +578,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_bottom_constant(self, node):
+    def visit_bottom_constant(self, node: ast.BottomConstant) -> str:
         return self.get_ident() + "{}{}null{}".format(
             '(' if self._parent_is_func_ref() else '',
             '(' + self.get_type_name(node.t) + ') ' if node.t else '',
@@ -579,7 +586,7 @@ class GroovyTranslator(BaseTranslator):
         )
 
     @append_to
-    def visit_integer_constant(self, node):
+    def visit_integer_constant(self, node: ast.IntegerConstant) -> str:
         if not self._cast_number and (
                 not self.always_cast_numbers and
                 node.integer_type.is_primitive()):
@@ -602,7 +609,7 @@ class GroovyTranslator(BaseTranslator):
         )
 
     @append_to
-    def visit_real_constant(self, node):
+    def visit_real_constant(self, node: ast.RealConstant) -> str:
         if not self._cast_number and (
                 not self.always_cast_numbers and
                 node.real_type.is_primitive()):
@@ -623,21 +630,21 @@ class GroovyTranslator(BaseTranslator):
         )
 
     @append_to
-    def visit_char_constant(self, node):
+    def visit_char_constant(self, node: ast.CharConstant) -> str:
         return "{ident}(Character) '{literal}'".format(
             ident=self.get_ident(),
             literal=node.literal
         )
 
     @append_to
-    def visit_string_constant(self, node):
+    def visit_string_constant(self, node: ast.StringConstant) -> str:
         return "{ident}\"{literal}\"".format(
             ident=self.get_ident(),
             literal=node.literal
         )
 
     @append_to
-    def visit_array_expr(self, node):
+    def visit_array_expr(self, node: ast.ArrayExpr) -> str:
         if not node.length:
             return "{ident}new {array}[0]".format(
                 ident=self.get_ident(),
@@ -657,14 +664,14 @@ class GroovyTranslator(BaseTranslator):
         )
 
     @append_to
-    def visit_boolean_constant(self, node):
+    def visit_boolean_constant(self, node: ast.BooleanConstant) -> str:
         return "{ident}{literal}".format(
             ident=self.get_ident(),
             literal=str(node.literal)
         )
 
     @append_to
-    def visit_variable(self, node):
+    def visit_variable(self, node: ast.Variable) -> str:
         return "{ident}{main_prefix}{name}".format(
             ident=self.get_ident(),
             main_prefix=self._get_main_prefix('vars', node.name),
@@ -672,7 +679,7 @@ class GroovyTranslator(BaseTranslator):
         )
 
     @append_to
-    def visit_binary_op(self, node):
+    def visit_binary_op(self, node: ast.BinaryOp) -> str:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -688,20 +695,20 @@ class GroovyTranslator(BaseTranslator):
         self.ident = old_ident
         return res
 
-    def visit_logical_expr(self, node):
+    def visit_logical_expr(self, node: ast.LogicalExpr) -> None:
         self.visit_binary_op(node)
 
-    def visit_equality_expr(self, node):
+    def visit_equality_expr(self, node: ast.EqualityExpr) -> None:
         self.visit_binary_op(node)
 
-    def visit_comparison_expr(self, node):
+    def visit_comparison_expr(self, node: ast.ComparisonExpr) -> None:
         self.visit_binary_op(node)
 
-    def visit_arith_expr(self, node):
+    def visit_arith_expr(self, node: ast.ArithExpr) -> None:
         self.visit_binary_op(node)
 
     @append_to
-    def visit_conditional(self, node):
+    def visit_conditional(self, node: ast.Conditional) -> str:
         prev_inside_is = self._inside_is
         prev_namespace = self._namespace
         self._inside_is = True
@@ -726,7 +733,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_is(self, node):
+    def visit_is(self, node: ast.Is) -> str:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -742,7 +749,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_new(self, node):
+    def visit_new(self, node: ast.New) -> str:
         old_ident = self.ident
         self.ident = 0
         prev_cast_number = self._cast_number
@@ -766,7 +773,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_field_access(self, node):
+    def visit_field_access(self, node: ast.FieldAccess) -> str:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -804,8 +811,12 @@ class GroovyTranslator(BaseTranslator):
             return self.get_type_name(signature)
         return None
 
+    def visit_enforce_type_via_cast(self, node: ast.EnforceTypeViaCast) -> None:
+        raise NotImplementedError(
+            'EnforceTypeViaCast is only supported by the Kotlin translator')
+
     @append_to
-    def visit_func_ref(self, node):
+    def visit_func_ref(self, node: ast.FunctionReference) -> str:
         old_ident = self.ident
 
         self.ident = 0
@@ -833,7 +844,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_func_call(self, node):
+    def visit_func_call(self, node: ast.FunctionCall) -> str:
         old_ident = self.ident
         self.ident = 0
         prev_cast_number = self._cast_number
@@ -868,7 +879,7 @@ class GroovyTranslator(BaseTranslator):
         return res
 
     @append_to
-    def visit_assign(self, node):
+    def visit_assign(self, node: ast.Assignment) -> str:
         old_ident = self.ident
         self.ident = 0
         prev_cast_number = self._cast_number
