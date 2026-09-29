@@ -1,41 +1,61 @@
 # pylint: disable=too-few-public-methods
 import sys
+from collections.abc import Mapping
+from typing import Protocol
 
-from src.generators.generator import Generator
+from src.generators.generator import EscalationLog, Generator
+from src.ir import ast
+from src.ir.context import Context
+from src.transformations.base import Transformation
 from src.transformations.type_erasure import TypeErasure
 from src.transformations.type_overwriting import TypeOverwriting
 from src.utils import random, read_lines, load_program
 from src.modules.logging import Logger
 
 
+class ProcessorArgs(Protocol):
+    transformation_types: list[str]
+    transformations: int | None
+    transformation_schedule: str
+    replay: str | None
+    log: bool
+    debug: bool
+    name: str
+    test_directory: str
+    language: str
+    options: Mapping[str, Mapping[str, int]]
+
+
 class ProgramProcessor():
 
     # Correctness-preserving transformations
-    CP_TRANSFORMATIONS = {
+    CP_TRANSFORMATIONS: dict[str, type[Transformation]] = {
         'TypeErasure': TypeErasure,
     }
 
     # Non correctness-preserving transformations
-    NCP_TRANSFORMATIONS = {
+    NCP_TRANSFORMATIONS: dict[str, type[TypeOverwriting]] = {
         'TypeOverwriting': TypeOverwriting,
     }
 
-    def __init__(self, proc_id, args, target_module=None):
+    def __init__(self, proc_id: int, args: ProcessorArgs,
+                 target_module: str | None = None) -> None:
         self.proc_id = proc_id
         self.args = args
         self.target_module = target_module
-        self.transformations = [
+        self.transformations: list[type[Transformation]] = [
             ProgramProcessor.CP_TRANSFORMATIONS[t]
             for t in self.args.transformation_types
         ]
-        self.ncp_transformations = list(
+        self.ncp_transformations: list[type[TypeOverwriting]] = list(
             ProgramProcessor.NCP_TRANSFORMATIONS.values())
-        self.transformation_schedule = self._get_transformation_schedule()
-        self.current_transformation = 0
-        self.escalations = []
+        self.transformation_schedule: list[type[Transformation]] = self._get_transformation_schedule()
+        self.current_transformation: int = 0
+        self.escalations: list[EscalationLog] = []
 
-    def _apply_transformation(self, transformation_cls,
-                              transformation_number, program):
+    def _apply_transformation[T: Transformation](self, transformation_cls: type[T],
+                                                 transformation_number: int, program: ast.Program
+                                                 ) -> tuple[ast.Program, T]:
         if self.args.log:
             logger = Logger(self.args.name, self.args.test_directory,
                             self.proc_id, transformation_cls.get_name(),
@@ -52,7 +72,7 @@ class ProgramProcessor():
         program = transformer.result()
         return program, transformer
 
-    def _get_transformation_schedule(self):
+    def _get_transformation_schedule(self) -> list[type[Transformation]]:
         if self.args.transformations is not None:
             # Randomly generate a transformation schedule.
             return [
@@ -61,7 +81,7 @@ class ProgramProcessor():
             ]
         # Get transformation schedule from file.
         lines = read_lines(self.args.transformation_schedule)
-        schedule = []
+        schedule: list[type[Transformation]] = []
         for line in lines:
             transformation = self.CP_TRANSFORMATIONS.get(line)
             if transformation is None:
@@ -71,7 +91,8 @@ class ProgramProcessor():
             schedule.append(transformation)
         return schedule
 
-    def get_program(self, pre_existing_context=None):
+    def get_program(self, pre_existing_context: Context | None = None
+                    ) -> tuple[ast.Program, bool]:
         if self.args.replay:
             if self.args.debug:
                 print("\nLoading program: " + self.args.replay)
@@ -81,10 +102,11 @@ class ProgramProcessor():
             # Generate a new program.
             return self.generate_program(pre_existing_context=pre_existing_context)
 
-    def get_transformations(self):
+    def get_transformations(self) -> list[type[Transformation]]:
         return self.transformation_schedule[:self.current_transformation]
 
-    def generate_program(self, pre_existing_context=None):
+    def generate_program(self, pre_existing_context: Context | None = None
+                         ) -> tuple[ast.Program, bool]:
         if self.args.debug:
             print("\nGenerating program: " + str(self.proc_id))
         if self.args.log:
@@ -102,10 +124,11 @@ class ProgramProcessor():
         self.escalations = generator.escalations
         return program, True
 
-    def can_transform(self):
+    def can_transform(self) -> bool:
         return self.current_transformation < len(self.transformation_schedule)
 
-    def transform_program(self, program):
+    def transform_program(self, program: ast.Program
+                          ) -> tuple[ast.Program, bool | None] | None:
         transformer_cls = (
             self.transformation_schedule[self.current_transformation])
         program, transformer = self._apply_transformation(
@@ -115,7 +138,8 @@ class ProgramProcessor():
             return None
         return program, transformer.preserve_correctness()
 
-    def inject_fault(self, program):
+    def inject_fault(self, program: ast.Program
+                     ) -> tuple[ast.Program, str | None] | None:
         transformer_cls = random.choice(self.ncp_transformations)
         program, transformer = self._apply_transformation(
             transformer_cls, self.current_transformation + 1, program)
