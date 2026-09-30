@@ -1,26 +1,37 @@
 import json
-from types import SimpleNamespace
+from copy import deepcopy
 
+from src.generators.config import cfg
 from src.modules.crossmodule import CrossModuleManager
+from src.utils import RandomUtils
 
 
 KLIBS = ["/lab/klibs/d17.klib", "/lab/klibs/d3.klib", "/lab/klibs/d1.klib"]
 
 
-class _Random:
+class _Random(RandomUtils):
+    def __init__(self):
+        pass
+
+    def choice(self, values):
+        return values[0]
 
     def bool(self, probability):
         return probability == 1.0
 
 
+def _unavailable_program(_path):
+    raise AssertionError("program loading is not expected")
+
+
 def _manager(test_directory, probability):
-    config = SimpleNamespace(prob=SimpleNamespace(
-        crossmodule_probability=1.0,
-        drop_indirect_deps_prob=probability,
-    ))
+    config = deepcopy(cfg)
+    config.prob.crossmodule_probability = 1.0
+    config.prob.max_module_chain_depth = 0
+    config.prob.drop_indirect_deps_prob = probability
     return CrossModuleManager(
         str(test_directory), config, "native", "test",
-        lambda _: None, _Random(), lambda _: None,
+        lambda _: None, _Random(), _unavailable_program,
     )
 
 

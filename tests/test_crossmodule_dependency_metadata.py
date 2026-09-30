@@ -14,12 +14,16 @@ from typing import List, Optional
 sys.argv = ["hephaestus.py", "--language", "kotlin"]
 
 import hephaestus
+from src.modules.crossmodule import CrossModuleManager
 
 result = hephaestus.ProgramRes(
     False, {}, direct_dependency_pid=7,
     dep_transitive_closure_klibs=["/published/d7.klib"])
 assert result.direct_dependency_pid == 7
 assert result.dep_transitive_closure_klibs == ["/published/d7.klib"]
+assert CrossModuleManager.dependency_klibs(result.dep_transitive_closure_klibs) == [
+    "/published/d7.klib"]
+assert CrossModuleManager.dependency_klibs(None) == []
 assert "dependency" not in result.stats
 assert hephaestus.ProgramRes.__annotations__["direct_dependency_pid"] == Optional[int]
 assert (hephaestus.ProgramRes.__annotations__["dep_transitive_closure_klibs"]

@@ -1,9 +1,11 @@
 import json
-from types import SimpleNamespace
+from copy import deepcopy
 
+from src.generators.config import cfg
 from src.ir import ast, kotlin_types as kt
 from src.ir.context import Context
 from src.modules.crossmodule import CrossModuleManager
+from src.utils import RandomUtils
 
 
 def _function(name, visibility=ast.Visibilities.PUBLIC):
@@ -30,7 +32,9 @@ def _publish_artifacts(lab, pids):
         (lab / "klibs" / "d{}.klib".format(pid)).write_bytes(b"")
 
 
-class _Random:
+class _Random(RandomUtils):
+    def __init__(self):
+        pass
 
     def choice(self, values):
         return values[0]
@@ -39,12 +43,20 @@ class _Random:
         return False
 
 
+class _ImportedContext(Context):
+    def __init__(self):
+        super().__init__()
+        self.prepared = False
+
+    def prepare_this_context_for_import(self):
+        self.prepared = True
+
+
 def _manager(test_directory, max_module_chain_depth=0, load_program=None):
-    config = SimpleNamespace(prob=SimpleNamespace(
-        crossmodule_probability=1.0,
-        max_module_chain_depth=max_module_chain_depth,
-        drop_indirect_deps_prob=0.0,
-    ))
+    config = deepcopy(cfg)
+    config.prob.crossmodule_probability = 1.0
+    config.prob.max_module_chain_depth = max_module_chain_depth
+    config.prob.drop_indirect_deps_prob = 0.0
     return CrossModuleManager(
         str(test_directory), config, "native", "test",
         lambda _: None, _Random(),
@@ -58,7 +70,7 @@ def _candidates(lab, max_module_chain_depth=0):
 
 def test_exported_names_include_qualified_main_but_skip_private_declarations():
     context = Context()
-    context.generation_package = "src.d7"
+    setattr(context, 'generation_package', "src.d7")
     program = ast.Program(context, "kotlin")
     program.add_declaration(_function("src.d7.visible"))
     program.add_declaration(
@@ -116,6 +128,28 @@ def test_publication_record_ignores_legacy_exports(tmp_path):
     }
 
 
+def test_ledger_falls_back_for_absent_invalid_or_non_mapping_json(tmp_path):
+    lab = tmp_path / "lab"
+    manager = _manager(lab)
+    assert manager.load_ledger() == {}
+
+    lab.mkdir()
+    (lab / "crossmodule.json").write_text("{")
+    assert manager.load_ledger() == {}
+
+    (lab / "crossmodule.json").write_text("[]")
+    assert manager.load_ledger() == {}
+
+
+def test_malformed_ledger_entries_do_not_claim_a_dependency_closure(tmp_path):
+    lab = tmp_path / "lab"
+    _write_ledger(lab, {"3": "stale", "17": {"closure": 42}})
+    manager = _manager(lab)
+
+    assert manager.ledger_closure(manager.load_ledger(), 3) == []
+    assert manager.ledger_closure(manager.load_ledger(), 17) == []
+
+
 def test_every_published_program_is_a_provider_candidate(tmp_path):
     lab = tmp_path / "lab"
     _write_ledger(lab, {
@@ -170,16 +204,31 @@ def test_missing_klib_does_not_publish_provider(tmp_path):
     assert not (lab / "7").exists()
 
 
+def test_missing_source_or_pickle_does_not_publish_provider(tmp_path):
+    lab = tmp_path / "lab"
+    source_dir = lab / "tmp" / "7"
+    source_dir.mkdir(parents=True)
+    klib = lab / "batch" / "d7.klib"
+    klib.parent.mkdir()
+    klib.write_bytes(b"klib")
+    manager = _manager(lab)
+
+    for filename in ("program.kt.bin", "program.kt"):
+        artifact = source_dir / filename
+        artifact.write_bytes(b"source")
+        assert manager.publish_provider(7, str(klib), [], None) is None
+        assert not (lab / "7").exists()
+        artifact.unlink()
+
+
 def test_prepare_dependency_restores_context_and_full_closure(tmp_path):
     lab = tmp_path / "lab"
     _write_ledger(lab, {"17": {"direct": 3, "closure": [3]}})
     _publish_artifacts(lab, [17, 3])
-    imported_context = SimpleNamespace(prepared=False)
-    imported_context.prepare_this_context_for_import = (
-        lambda: setattr(imported_context, "prepared", True))
+    imported_context = _ImportedContext()
 
     dependency = _manager(
-        lab, load_program=lambda _: SimpleNamespace(context=imported_context)
+        lab, load_program=lambda _: ast.Program(imported_context, "kotlin")
     ).prepare_dependency(99)
 
     assert dependency["pid"] == 17
@@ -190,3 +239,27 @@ def test_prepare_dependency_restores_context_and_full_closure(tmp_path):
         str((lab / "klibs" / "d3.klib").resolve()),
     ]
     assert imported_context.prepared
+
+
+def test_prepare_dependency_skips_failed_program_load(tmp_path):
+    lab = tmp_path / "lab"
+    _write_ledger(lab, {"17": {"direct": None, "closure": []}})
+    _publish_artifacts(lab, [17])
+
+    assert _manager(lab).prepare_dependency(99) is None
+
+
+def test_manifest_diff_reports_only_unexpected_dependencies(tmp_path):
+    manager = _manager(tmp_path)
+    manager.read_manifest_depends = lambda _: {"d17", "d3", "d9"}
+
+    assert manager.manifest_closure_diff("unused.klib", [17, 3]) == {
+        "manifest_depends": ["d17", "d3", "d9"],
+        "closure": ["d17", "d3"],
+        "unexpected": ["d9"],
+    }
+    assert manager.manifest_closure_diff("unused.klib", [17, 3], [3]) == {
+        "manifest_depends": ["d17", "d3", "d9"],
+        "closure": ["d17"],
+        "unexpected": ["d3", "d9"],
+    }

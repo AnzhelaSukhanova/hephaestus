@@ -126,6 +126,7 @@ class Manager:
 
     @staticmethod
     def dependency_klibs(proc_res):
+        assert proc_res is None
         return []
 
     @staticmethod
