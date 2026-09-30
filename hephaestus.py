@@ -1,10 +1,12 @@
 #! /usr/bin/env python3
 # pylint: disable=too-few-public-methods
 from datetime import datetime
+from collections.abc import Callable, Mapping
 import fcntl
 import json
 import functools
 import multiprocessing as mp
+from multiprocessing.pool import ApplyResult
 import os
 import tempfile
 import sys
@@ -14,11 +16,12 @@ import time
 import traceback
 from collections import OrderedDict
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import Any, List, NamedTuple, Optional
 
 from src.args import args as cli_args, validate_args, pre_process_args
 from src import utils
 from src.compilers.kotlin import KotlinCompiler
+from src.compilers.base import BaseCompiler
 from src.compilers.groovy import GroovyCompiler
 from src.compilers.java import JavaCompiler
 from src.compilers.scala import ScalaCompiler
@@ -26,9 +29,11 @@ from src.translators.kotlin import KotlinTranslator
 from src.translators.groovy import GroovyTranslator
 from src.translators.scala import ScalaTranslator
 from src.translators.java import JavaTranslator
-from src.modules.crossmodule import CrossModuleManager
+from src.modules.crossmodule import CrossModuleManager, PublicationRecord
 from src.modules.processor import ProgramProcessor
 from src.generators.config import cfg
+from src.generators.generator import EscalationLog
+from src.ir import ast
 from src.tools.changes_from_ir_dumps import write_program_ir_changes
 from src.tools.ir_coverage import (
     coverage_compile_cmd,
@@ -40,22 +45,28 @@ from src.tools.ir_coverage import (
 )
 
 
-STOP_COND = False
-CROSSMODULE_MANAGER = None
-CROSSMODULE_MANAGER_PID = None
-TRANSLATORS = {
+STOP_COND: bool = False
+CROSSMODULE_MANAGER: CrossModuleManager | None = None
+CROSSMODULE_MANAGER_PID: int | None = None
+type Translator = KotlinTranslator | GroovyTranslator | JavaTranslator | ScalaTranslator
+TRANSLATORS: dict[str, type[Translator]] = {
     'kotlin': KotlinTranslator,
     'groovy': GroovyTranslator,
     'java': JavaTranslator,
     'scala': ScalaTranslator
 }
-COMPILERS = {
+COMPILERS: dict[str, type[BaseCompiler]] = {
     'kotlin': KotlinCompiler,
     'groovy': GroovyCompiler,
     'java': JavaCompiler,
     'scala': ScalaCompiler
 }
-STATS = {
+type ProgramStats = dict[str, Any]
+type TimeMetrics = dict[int, dict[str, float]]
+type OracleResult = tuple[dict[int, ProgramStats], float, TimeMetrics,
+                          dict[int, PublicationRecord]]
+
+STATS: dict[str, Any] = {
     "Info": {
         "stop_cond": cli_args.stop_cond,
         "stop_cond_value": (
@@ -81,7 +92,7 @@ STATS = {
 }
 if cfg.prob.crossmodule_probability:
     STATS["crossmodule"] = {}
-TEMPLATE_MSG = (u"Test Programs Passed {} / {} \u2714\t\t"
+TEMPLATE_MSG: str = (u"Test Programs Passed {} / {} \u2714\t\t"
                 "Test Programs Failed {} / {} \u2718\r")
 class ProgramRes(NamedTuple):
     failed: bool
@@ -92,7 +103,7 @@ class ProgramRes(NamedTuple):
 
 # ============= util functions =======================
 
-def print_msg():
+def print_msg() -> None:
     sys.stdout.write('\033[2K\033[1G')
     failed = STATS['totals']['failed']
     passed = STATS['totals']['passed']
@@ -103,7 +114,7 @@ def print_msg():
     sys.stdout.write(msg)
 
 
-def logging(compiler_version):
+def logging(compiler_version: str) -> None:
     print("{} {} ({})".format("stop_cond".ljust(21), cli_args.stop_cond,
                               (cli_args.seconds
                                if cli_args.stop_cond == "timeout"
@@ -136,7 +147,8 @@ def logging(compiler_version):
     STATS['Info']['compiler'] = compiler_version
 
 
-def run_command(arguments, get_stdout=True, cwd=None):
+def run_command(arguments: list[str], get_stdout: bool = True,
+                cwd: str | None = None) -> tuple[bool, str | sp.CalledProcessError]:
     """Run a command
     Args:
         A list with the arguments to execute. For example ['ls', 'foo']
@@ -157,8 +169,10 @@ def run_command(arguments, get_stdout=True, cwd=None):
         sys_env['JAVA_OPTS'] = "-Xmx8g"
         if not is_windows:
             # FIXME the wildcard * maybe won't work in Windows
-            arguments = ' '.join(arguments)
-        cmd = sp.Popen(arguments, stdout=sp.PIPE,
+            command: str | list[str] = ' '.join(arguments)
+        else:
+            command = arguments
+        cmd = sp.Popen(command, stdout=sp.PIPE,
                        stderr=sp.STDOUT, shell=True, env=sys_env,
                        cwd=cwd)
         stdout, stderr = cmd.communicate()
@@ -173,23 +187,25 @@ def run_command(arguments, get_stdout=True, cwd=None):
     return status, err
 
 
-def timed(fn, *args, **kwargs):
+def timed[**P, R](fn: Callable[P, R], *args: P.args,
+                  **kwargs: P.kwargs) -> tuple[R, float]:
     start = time.perf_counter()
     result = fn(*args, **kwargs)
     return result, time.perf_counter() - start
 
 
-def get_generator_dir(pid):
+def get_generator_dir(pid: int) -> str:
     return os.path.join(cli_args.test_directory, "generator",
                         "iter_" + str(pid))
 
 
-def get_transformations_dir(pid, tid):
+def get_transformations_dir(pid: int, tid: int) -> str:
     return os.path.join(cli_args.test_directory, "transformations",
                         "iter_" + str(pid), str(tid))
 
 
-def save_program(program, program_str, program_file):
+def save_program(program: ast.Program, program_str: str,
+                 program_file: str) -> None:
     dst_dir = os.path.dirname(program_file)
     utils.mkdir(dst_dir)
     # Save the program
@@ -197,7 +213,7 @@ def save_program(program, program_str, program_file):
     utils.dump_program(program_file + ".bin", program)
 
 
-def setup_crossmodule_manager(compiler_version):
+def setup_crossmodule_manager(compiler_version: str) -> CrossModuleManager:
     global CROSSMODULE_MANAGER, CROSSMODULE_MANAGER_PID
     process_id = os.getpid()
     if CROSSMODULE_MANAGER_PID == process_id:
@@ -217,19 +233,20 @@ def setup_crossmodule_manager(compiler_version):
     return CROSSMODULE_MANAGER
 
 
-def _cleanup_program_tmp(pid):
+def _cleanup_program_tmp(pid: int) -> None:
     shutil.rmtree(os.path.join(cli_args.test_directory, 'tmp', str(pid)),
                   ignore_errors=True)
 
 
-def preserve_final_program_dir(pid):
+def preserve_final_program_dir(pid: int) -> None:
     src_dir = os.path.join(cli_args.test_directory, 'tmp', str(pid))
     dst_dir = os.path.join(cli_args.test_directory, str(pid))
     if os.path.exists(src_dir):
         shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
 
-def preserve_ir_changes_to_tmp(dirname, pid):
+def preserve_ir_changes_to_tmp(dirname: str, pid: int
+                               ) -> dict[str, int | None] | None:
     if not cli_args.dump_ir:
         return None
     dump_root = os.path.join(dirname, 'src', 'ir')
@@ -241,11 +258,11 @@ def preserve_ir_changes_to_tmp(dirname, pid):
         return json.load(f)
 
 
-def jacoco_output_dir():
+def jacoco_output_dir() -> Path:
     return Path(cli_args.test_directory) / 'coverage'
 
 
-def setup_live_jacoco():
+def setup_live_jacoco() -> None:
     # Must run once in the parent process, before the worker pool (if any)
     # is created: it wipes stale state and does a one-time, somewhat
     # expensive class-file extraction that every worker will then share.
@@ -261,11 +278,11 @@ def setup_live_jacoco():
     _jacoco_merge_lock_path(output_dir).touch(exist_ok=True)
 
 
-def _jacoco_merge_lock_path(output_dir):
+def _jacoco_merge_lock_path(output_dir: Path) -> Path:
     return output_dir / '.merge.lock'
 
 
-def _refresh_jacoco_report(output_dir):
+def _refresh_jacoco_report(output_dir: Path) -> None:
     # Serialize merge + report generation across worker processes: several
     # pids can finish a live-Jacoco compile at roughly the same time, and
     # jacococli.jar has no cross-process coordination of its own.
@@ -289,7 +306,9 @@ def _refresh_jacoco_report(output_dir):
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
-def maybe_run_live_jacoco(pid, phase_changes):
+def maybe_run_live_jacoco(pid: int,
+                          phase_changes: Mapping[str, int | None] | None
+                          ) -> None:
     if cli_args.jacoco_always:
         pass
     elif cli_args.jacoco_lowerings and phase_changes:
@@ -320,7 +339,7 @@ def maybe_run_live_jacoco(pid, phase_changes):
         _refresh_jacoco_report(output_dir)
 
 
-def save_stats():
+def save_stats() -> None:
     dst_dir = os.path.join(cli_args.test_directory)
     faults_file = os.path.join(dst_dir, 'faults.json')
     stats_file = os.path.join(dst_dir, "stats.json")
@@ -349,7 +368,7 @@ def save_stats():
     STATS['time_metrics'] = time_metrics
 
 
-def stop_condition(iteration, time_passed):
+def stop_condition(iteration: int, time_passed: float) -> bool:
     global STOP_COND
     if STOP_COND:
         return False
@@ -360,7 +379,9 @@ def stop_condition(iteration, time_passed):
     return True
 
 
-def update_stats(res, batch, batch_time, escalations=None):
+def update_stats(res: OracleResult, batch: int, batch_time: float,
+                 escalations: Mapping[str, list[EscalationLog]] | None = None
+                 ) -> None:
     res, compilation_time, time_metrics, published = res
     failed = len(res)
     passed = batch - failed
@@ -391,14 +412,15 @@ def update_stats(res, batch, batch_time, escalations=None):
     save_stats()
 
 
-def get_batches(programs):
+def get_batches(programs: int) -> int:
     if cli_args.stop_cond == 'timeout':
         return cli_args.batch
     return min(cli_args.batch, cli_args.iterations - programs)
 
 
-def process_cp_transformations(pid, dirname, translator, proc,
-                               program, package_name):
+def process_cp_transformations(pid: int, dirname: str, translator: Translator,
+                               proc: ProgramProcessor, program: ast.Program,
+                               package_name: str) -> str:
     program_str = None
     while proc.can_transform():
         res = proc.transform_program(program)
@@ -427,8 +449,10 @@ def process_cp_transformations(pid, dirname, translator, proc,
     return dst_file
 
 
-def process_ncp_transformations(pid, dirname, translator, proc,
-                                program, package_name):
+def process_ncp_transformations(pid: int, dirname: str,
+                                translator: Translator, proc: ProgramProcessor,
+                                program: ast.Program, package_name: str
+                                ) -> tuple[str, str | None] | None:
     translator.package = 'src.' + package_name
     res = proc.inject_fault(program)
     if res is None:
@@ -452,14 +476,14 @@ def process_ncp_transformations(pid, dirname, translator, proc,
     save_program(program, program_str, dst_file2)
     return dst_file, injected_err
 
-def save_escalations(pid, escalations):
+def save_escalations(pid: int, escalations: list[EscalationLog]) -> None:
     dst_file = os.path.join(cli_args.test_directory, 'tmp', str(pid), 'escalations.json')
     utils.mkdir(os.path.dirname(dst_file))
     with open(dst_file, 'w') as out:
         json.dump(escalations, out, indent=2)
 
 
-def gen_program(pid, dirname):
+def gen_program(pid: int, dirname: str) -> ProgramRes:
     """
     This function is responsible processing an iteration.
 
@@ -550,7 +574,7 @@ def gen_program(pid, dirname):
             dep_transitive_closure_klibs)
 
 
-def gen_program_mul(pid, dirname):
+def gen_program_mul(pid: int, dirname: str) -> ProgramRes | None:
     global STOP_COND
     if STOP_COND:
         return
@@ -561,7 +585,8 @@ def gen_program_mul(pid, dirname):
         STOP_COND = True
 
 
-def _report_failed(pid, tid, compiler, oracle):
+def _report_failed(pid: int, tid: int, compiler: BaseCompiler,
+                   oracle: bool) -> None:
     """Find which program introduce the error and then report it.
     """
     translator = TRANSLATORS[cli_args.language]()
@@ -587,8 +612,9 @@ def _report_failed(pid, tid, compiler, oracle):
         tid -= 1
 
 
-def enrich_error(compiler, err_file, cwd=None):
-    command_outputs = {}
+def enrich_error(compiler: BaseCompiler, err_file: str,
+                 cwd: str | None = None) -> dict[str, str]:
+    command_outputs: dict[str, str] = {}
 
     for name, command in compiler.get_error_enrichment_cmds(err_file).items():
         _, output = run_command(command, cwd=cwd)
@@ -597,7 +623,8 @@ def enrich_error(compiler, err_file, cwd=None):
     return compiler.analyze_error_enrichment_output(err_file, command_outputs)
 
 
-def get_time_metrics(oracles, compilation_time):
+def get_time_metrics(oracles: Mapping[int, ProgramRes],
+                     compilation_time: float) -> TimeMetrics:
     if not cli_args.time_metrics:
         return {}
     return {
@@ -610,13 +637,18 @@ def get_time_metrics(oracles, compilation_time):
     }
 
 
-def attach_time_metrics(pid, stats, time_metrics):
+def attach_time_metrics(pid: int, stats: ProgramStats,
+                        time_metrics: TimeMetrics) -> None:
     if cli_args.time_metrics:
         stats["time_metrics"] = time_metrics[pid]
 
 
-def _build_crossmodule_provider(proc_res, filter_patterns, dependency_paths,
-                               friend_paths, module_name, compile_cwd):
+def _build_crossmodule_provider(proc_res: ProgramRes,
+                                filter_patterns: set[str],
+                                dependency_paths: list[str],
+                                friend_paths: list[str], module_name: str,
+                                compile_cwd: str
+                                ) -> tuple[tuple[str, list[str]] | None, float]:
     """Build the correct source as an isolated provider KLIB."""
     correct_program, = (
         program
@@ -641,7 +673,7 @@ def _build_crossmodule_provider(proc_res, filter_patterns, dependency_paths,
     return None, compilation_time
 
 
-def check_oracle(dirname, oracles):
+def check_oracle(dirname: str, oracles: Mapping[int, ProgramRes]) -> OracleResult:
     """
     This function is responsible for checking the oracle of the generated
     programs.
@@ -665,7 +697,7 @@ def check_oracle(dirname, oracles):
         # is handed has to be addressed absolutely.
         klibs = [os.path.abspath(klib)
                  for klib in CROSSMODULE_MANAGER.dependency_klibs(
-                     proc_res)]
+                     proc_res.dep_transitive_closure_klibs)]
         if not klibs:
             continue
         kept, dropped = CROSSMODULE_MANAGER.apply_drop_knob(klibs)
@@ -827,7 +859,8 @@ def check_oracle(dirname, oracles):
     return output, compilation_time, time_metrics, published
 
 
-def check_oracle_mul(dirname, oracles):
+def check_oracle_mul(dirname: str,
+                     oracles: Mapping[int, ProgramRes]) -> OracleResult:
     global STOP_COND
     if STOP_COND:
         return {}, 0, {}, {}
@@ -846,7 +879,9 @@ def check_oracle_mul(dirname, oracles):
         return {}, 0, {}, {}
 
 
-def _run(process_program, process_res, compiler_version):
+def _run[T](process_program: Callable[[int, str], T],
+            process_res: Callable[[int, list[T], str, int], None],
+            compiler_version: str) -> None:
     logging(compiler_version)
     iteration = 1
     time_passed = 0
@@ -871,12 +906,13 @@ def _run(process_program, process_res, compiler_version):
             return
 
 
-def run(compiler_version):
+def run(compiler_version: str) -> None:
 
-    def process_program(pid, dirname):
+    def process_program(pid: int, dirname: str) -> ProgramRes:
         return gen_program(pid, dirname)
 
-    def process_res(start_index, res, testdir, batch):
+    def process_res(start_index: int, res: list[ProgramRes],
+                    testdir: str, batch: int) -> None:
         oracles = OrderedDict()
         for i, r in enumerate(res):
             oracles[start_index + i] = r
@@ -890,12 +926,10 @@ def run(compiler_version):
                 for i, r in enumerate(res)
                 if r.stats.get("escalations")
             }
-        res = (
-            ({}, 0, {}, {})
-            if cli_args.dry_run
-            else check_oracle(testdir, oracles)
-        )
-        update_stats(res, batch, batch_time, batch_escalations)
+        update_stats(
+            ({}, 0, {}, {}) if cli_args.dry_run
+            else check_oracle(testdir, oracles),
+            batch, batch_time, batch_escalations)
 
     try:
         _run(process_program, process_res, compiler_version)
@@ -908,21 +942,24 @@ def run(compiler_version):
     print("Total faults: " + str(STATS['totals']['failed']))
 
 
-def run_parallel(compiler_version):
+def run_parallel(compiler_version: str) -> None:
 
     pool = mp.Pool(
         cli_args.workers,
         initializer=setup_crossmodule_manager,
         initargs=(compiler_version,))
 
-    def process_program(pid, dirname):
+    def process_program(pid: int, dirname: str
+                        ) -> ApplyResult[ProgramRes | None] | None:
         try:
             return pool.apply_async(gen_program_mul, args=(pid, dirname))
         except KeyboardInterrupt:
             global STOP_COND
             STOP_COND = True
 
-    def process_res(start_index, res, testdir, batch):
+    def process_res(start_index: int,
+                    res: list[ApplyResult[ProgramRes | None] | None],
+                    testdir: str, batch: int) -> None:
         results = [r.get() for r in res]
         batch_time = functools.reduce(lambda acc,
                                       x: acc + x.stats["time"],
@@ -935,7 +972,7 @@ def run_parallel(compiler_version):
                 if r.stats.get("escalations")
             }
 
-        def update(res):
+        def update(res: OracleResult) -> None:
             update_stats(res, batch, batch_time, batch_escalations)
 
         try:
@@ -968,7 +1005,7 @@ def run_parallel(compiler_version):
     print("Total faults: " + str(STATS['totals']['failed']))
 
 
-def main():
+def main() -> None:
     validate_args(cli_args)
     pre_process_args(cli_args)
     _, compiler_version = run_command(
