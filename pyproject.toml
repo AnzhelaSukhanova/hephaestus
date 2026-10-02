@@ -24,6 +24,9 @@ dependencies = [
     "networkx",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "coverage>=7.10", "pyright>=1.1.400"]
+
 [tool.setuptools]
 packages = [
   "src",
