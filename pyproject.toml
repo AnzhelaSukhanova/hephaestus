@@ -35,6 +35,8 @@ packages = [
   "src.generators",
   "src.ir",
   "src.modules",
+  "src.oracles",
+  "src.tools",
   "src.transformations",
   "src.translators",
 ]
