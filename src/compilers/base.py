@@ -3,18 +3,20 @@ from collections.abc import Collection
 import re
 
 
-class BaseCompiler():
+class BaseCompiler[S]:
     ERROR_REGEX = None
     CRASH_REGEX = None
 
     def __init__(self, input_name: str,
-                 filter_patterns: Collection[str] | None = None) -> None:
+                 filter_patterns: Collection[str] | None = None, *,
+                 settings: S) -> None:
         self.input_name: str = input_name
         self.filter_patterns: Collection[str] = filter_patterns or []
         self.crash_msg: str | None = None
+        self.settings: S = settings
 
     @classmethod
-    def get_compiler_version(cls) -> list[str]:
+    def get_compiler_version(cls, settings: S) -> list[str]:
         raise NotImplementedError('get_compiler_version() must be implemented')
 
     def get_compiler_cmd(self) -> list[str]:
