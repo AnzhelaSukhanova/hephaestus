@@ -2,6 +2,7 @@ import json
 import subprocess
 import tomllib
 from pathlib import Path
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -238,10 +239,49 @@ def test_non_kotlin_disables_default_crossmodule_probability(
     ["--language", "groovy", "--workers", "2"],
     ["--language", "java"],
     ["--language", "scala"],
+    ["--backend", "wasm", "--dump-ir", "--workers", "2"],
 ])
 def test_startup_order_version_stripping_and_dispatch(
         tmp_path: Path, arguments: list[str]) -> None:
-    _assert_success(_launch(tmp_path, "startup", arguments))
+    import hephaestus
+
+    options = hephaestus.parse_args([
+        '--language', 'kotlin', '-P', '-b', str(tmp_path / 'bugs'),
+        '-n', 'session', *arguments,
+    ])
+    application = hephaestus.Fuzzer(options)
+    events = Mock()
+    command = application.compilation.version_command()
+    with (
+        patch.object(hephaestus, 'validate_args') as validation,
+        patch.object(hephaestus, 'pre_process_args') as preprocessing,
+        patch.object(application.compilation, 'run_command',
+                     return_value=(True, ' \n compiler version 1.2 \t\n')) as version,
+        patch.object(application, 'setup_crossmodule_manager') as manager,
+        patch.object(application.coverage, 'setup_live_jacoco') as jacoco,
+        patch.object(application.scheduler, 'run') as sequential,
+        patch.object(application.scheduler, 'run_parallel') as parallel,
+    ):
+        events.attach_mock(validation, 'validate')
+        events.attach_mock(preprocessing, 'preprocess')
+        events.attach_mock(version, 'version')
+        events.attach_mock(manager, 'manager')
+        events.attach_mock(jacoco, 'jacoco')
+        events.attach_mock(sequential, 'run')
+        events.attach_mock(parallel, 'parallel')
+        application.start()
+    dispatch = (call.run('compiler version 1.2')
+                if options.debug or options.workers is None
+                else call.parallel('compiler version 1.2'))
+    assert events.mock_calls == [
+        call.validate(application.options),
+        call.preprocess(application.options),
+        call.version(command),
+        call.manager('compiler version 1.2'),
+        call.jacoco(),
+        dispatch,
+    ]
+    assert not (tmp_path / 'bugs').exists()
 
 
 @pytest.mark.parametrize("arguments", [

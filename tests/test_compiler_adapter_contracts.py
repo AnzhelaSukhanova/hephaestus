@@ -16,7 +16,7 @@ def _load_kotlin_compiler(monkeypatch):
         return importlib.import_module("src.compilers.kotlin")
 
 
-class SyntheticCompiler(BaseCompiler):
+class SyntheticCompiler(BaseCompiler[None]):
     ERROR_REGEX = re.compile(r"(?m)^([^:\n]+):(\d+): (.*)$")
     CRASH_REGEX = re.compile(r"CRASH")
 
@@ -28,7 +28,8 @@ class SyntheticCompiler(BaseCompiler):
 
 
 def test_base_compiler_diagnostics_filters_and_enrichment_defaults():
-    compiler = SyntheticCompiler("source", {r"ignore\.kt:\d+: [^\n]+\n?"})
+    compiler = SyntheticCompiler("source", {r"ignore\.kt:\d+: [^\n]+\n?"},
+                                 settings=None)
 
     failed, matches = compiler.analyze_compiler_output(
         "ignore.kt:1: filtered\nfile.kt:2: broken\nfile.kt:3: missing")
@@ -42,7 +43,7 @@ def test_base_compiler_diagnostics_filters_and_enrichment_defaults():
 
 
 def test_base_compiler_crash_returns_no_diagnostics():
-    compiler = SyntheticCompiler("source")
+    compiler = SyntheticCompiler("source", settings=None)
     output = "CRASH\nfile.kt:2: broken"
 
     assert compiler.analyze_compiler_output(output) == (None, [])
