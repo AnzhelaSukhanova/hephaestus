@@ -5,7 +5,7 @@ from collections.abc import Collection
 from src.compilers.base import BaseCompiler
 
 
-class GroovyCompiler(BaseCompiler):
+class GroovyCompiler(BaseCompiler[None]):
     # Match (example.groovy):(error message until empty line)
     ERROR_REGEX = re.compile(r'([a-zA-Z0-9\\/_]+.groovy):([\s\S]*?(?=\n{2,}))')
 
@@ -14,12 +14,13 @@ class GroovyCompiler(BaseCompiler):
     STACKOVERFLOW_REGEX = re.compile(r'(.*java.lang.StackOverflowError)(.*)')
 
     def __init__(self, input_name: str,
-                 filter_patterns: Collection[str] | None = None) -> None:
+                 filter_patterns: Collection[str] | None = None, *,
+                 settings: None = None) -> None:
         input_name = os.path.join(input_name, '*', '*.groovy')
-        super().__init__(input_name, filter_patterns)
+        super().__init__(input_name, filter_patterns, settings=settings)
 
     @classmethod
-    def get_compiler_version(cls) -> list[str]:
+    def get_compiler_version(cls, settings: None = None) -> list[str]:
         return ['groovyc-l', '-version']
 
     def get_compiler_cmd(self) -> list[str]:
