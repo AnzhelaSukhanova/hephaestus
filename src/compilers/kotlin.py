@@ -2,15 +2,27 @@ import re
 import os
 import zipfile
 from collections.abc import Collection
+from dataclasses import dataclass
 
 from src.compilers.base import BaseCompiler
-from src.args import args as cli_args
 
-backend = cli_args.backend
-is_native = backend == 'native'
-compiler = f'$HOME/kotlin/{"kotlin-native/dist" if is_native else "dist/kotlinc"}/bin/kotlinc-{backend}'
 
-class KotlinCompiler(BaseCompiler):
+@dataclass(frozen=True)
+class KotlinSettings:
+    backend: str = 'native'
+    dump_ir: bool = False
+    executable: str | None = None
+
+
+def _compiler_executable(settings: KotlinSettings) -> str:
+    if settings.executable is not None:
+        return settings.executable
+    distribution = ('kotlin-native/dist' if settings.backend == 'native'
+                    else 'dist/kotlinc')
+    return f'$HOME/kotlin/{distribution}/bin/kotlinc-{settings.backend}'
+
+
+class KotlinCompiler(BaseCompiler[KotlinSettings]):
     ERROR_REGEX = re.compile(
         r'([:\\a-zA-Z0-9\/_]+\.kt):(\d+):(\d+):\s+error:\s+(.*)')
     CRASH_REGEX = re.compile(
@@ -27,8 +39,9 @@ class KotlinCompiler(BaseCompiler):
                  filter_patterns: Collection[str] | None = None,
                  dependency_klibs: list[str] | None = None,
                  friend_klibs: list[str] | None = None,
-                 module_name: str | None = None) -> None:
-        super().__init__(input_name, filter_patterns)
+                 module_name: str | None = None, *,
+                 settings: KotlinSettings = KotlinSettings()) -> None:
+        super().__init__(input_name, filter_patterns, settings=settings)
         # The whole transitive closure becomes the library path, while only
         # the direct dependencies are attached as a friend module.
         self.dependency_klibs: list[str] = dependency_klibs or []
@@ -43,17 +56,19 @@ class KotlinCompiler(BaseCompiler):
         return self.module_name + '.klib'
 
     @classmethod
-    def get_compiler_version(cls) -> list[str]:
-        return [compiler, '-version']
+    def get_compiler_version(
+            cls, settings: KotlinSettings = KotlinSettings()) -> list[str]:
+        return [_compiler_executable(settings), '-version']
 
     def get_compiler_cmd(self) -> list[str]:
         # The problem is that for get_phases_compiler_cmd we want to provide concrete filename, but self.input_name usually stores whole folder for compilation (batch)
         # And also we want to use _get_compiler_cmd as a base, so don't attach dump_ir_flags to it directly
-        dump_ir_flags = ['-Xphases-to-dump=' + self.IR_MODIFYING_INLINER_PHASES, '-Xdump-directory=' + self.input_name + '/ir'] if cli_args.dump_ir  else []
+        dump_ir_flags = ['-Xphases-to-dump=' + self.IR_MODIFYING_INLINER_PHASES, '-Xdump-directory=' + self.input_name + '/ir'] if self.settings.dump_ir else []
         return self._get_compiler_cmd(self.input_name) + dump_ir_flags
 
     def _get_compiler_cmd(self, input_name: str) -> list[str]:
-        if is_native:
+        compiler = _compiler_executable(self.settings)
+        if self.settings.backend == 'native':
             command = [compiler, input_name, '-produce', 'library',
                        '-o', self.module_name or input_name,
                        '-nowarn', '-Xklib-ir-inliner=full']
@@ -75,9 +90,8 @@ class KotlinCompiler(BaseCompiler):
             command.extend(self._js_dependency_flags())
             return command
 
-    @staticmethod
-    def _stdlib() -> str:
-        is_wasm = backend == 'wasm'
+    def _stdlib(self) -> str:
+        is_wasm = self.settings.backend == 'wasm'
         return f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
 
     def _libraries_value(self) -> str:
