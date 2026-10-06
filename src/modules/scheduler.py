@@ -1,0 +1,238 @@
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
+import functools
+import multiprocessing as mp
+from multiprocessing.pool import ApplyResult
+import os
+import shutil
+import tempfile
+import time
+import traceback
+
+from src import utils
+from src.compilers.base import BaseCompiler
+from src.modules.artifacts import Artifacts
+from src.modules.compilation import Compilation
+from src.modules.coverage import LiveCoverage
+from src.modules.evaluation import Evaluation
+from src.modules.generation import Generation
+from src.modules.models import ProgramRes, OracleResult
+from src.modules.worker_reporting import TimingMetrics
+from src.modules.worker import (
+    RunOptions, WorkerInputs, WorkerResources, get_worker_resources,
+    initialize_worker, snapshot_generator_config,
+)
+from src.generators.generator import EscalationLog
+
+
+class Scheduler[S]:
+    def __init__(
+            self, options: RunOptions, generation: Generation,
+            evaluation: Evaluation[S], reporting: TimingMetrics,
+            compiler_cls: type[BaseCompiler[S]], *,
+            compiler_settings: S) -> None:
+        self.options = options
+        self.generation = generation
+        self.evaluation = evaluation
+        self.reporting = reporting
+        self.compiler_cls = compiler_cls
+        self.compiler_settings = compiler_settings
+        self.stopped = False
+
+    def stop_condition(self, iteration: int, time_passed: float) -> bool:
+        if self.stopped:
+            return False
+        if self.options.seconds:
+            return time_passed < self.options.seconds
+        if self.options.iterations:
+            return iteration < self.options.iterations + 1
+        return True
+
+    def get_batches(self, programs: int) -> int:
+        if self.options.stop_cond == 'timeout':
+            return self.options.batch
+        return min(self.options.batch, self.options.iterations - programs)
+
+    def _run[T](self, process_program: Callable[[int, str], T],
+                process_res: Callable[[int, list[T], str, int], None],
+                compiler_version: str) -> None:
+        self.reporting.logging(compiler_version)
+        iteration = 1
+        time_passed = 0
+        start_time = time.perf_counter()
+        while self.stop_condition(iteration, time_passed):
+            try:
+                utils.random.reset_word_pool()
+                tmpdir = tempfile.mkdtemp()
+                res = []
+                batches = self.get_batches(iteration - 1)
+                for i in range(batches):
+                    dirname = os.path.join(tmpdir, 'src')
+                    pid = iteration + i
+                    r = process_program(pid, dirname)
+                    res.append(r)
+
+                process_res(iteration, res, tmpdir, batches)
+
+                time_passed = time.perf_counter() - start_time
+                iteration += batches
+            except KeyboardInterrupt:
+                return
+
+    def _batch_metrics(
+            self, start_index: int, results: list[ProgramRes]
+            ) -> tuple[float, dict[str, list[EscalationLog]]]:
+        batch_time = functools.reduce(lambda acc, x: acc + x.stats["time"],
+                                      results, 0)
+        batch_escalations = {}
+        if not self.options.disable_metrics:
+            batch_escalations = {
+                str(start_index + i): r.stats.get("escalations", [])
+                for i, r in enumerate(results)
+                if r.stats.get("escalations")
+            }
+        return batch_time, batch_escalations
+
+    @staticmethod
+    def _batch_oracles(start_index: int, results: list[ProgramRes]
+                       ) -> OrderedDict[int, ProgramRes]:
+        oracles = OrderedDict()
+        for i, r in enumerate(results):
+            oracles[start_index + i] = r
+        return oracles
+
+    def _finish(self) -> None:
+        path = os.path.join(self.options.test_directory, 'tmp')
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        print()
+        print("Total faults: " + str(self.reporting.stats['totals']['failed']))
+
+    def run(self, compiler_version: str) -> None:
+
+        def process_program(pid: int, dirname: str) -> ProgramRes:
+            return self.generation.gen_program(pid, dirname)
+
+        def process_res(start_index: int, res: list[ProgramRes],
+                        testdir: str, batch: int) -> None:
+            oracles = self._batch_oracles(start_index, res)
+            batch_time, batch_escalations = self._batch_metrics(start_index, res)
+            self.reporting.update_stats(
+                ({}, 0, {}, {}) if self.options.dry_run
+                else self.evaluation.check_oracle(testdir, oracles),
+                batch, batch_time, batch_escalations)
+
+        try:
+            self._run(process_program, process_res, compiler_version)
+        except KeyboardInterrupt:
+            pass
+        self._finish()
+
+    def run_parallel(self, compiler_version: str) -> None:
+
+        pool = mp.Pool(
+            self.options.workers,
+            initializer=initialize_scheduler_worker,
+            initargs=(self.worker_inputs(compiler_version),))
+
+        def process_program(pid: int, dirname: str
+                            ) -> ApplyResult[ProgramRes | None] | None:
+            try:
+                return pool.apply_async(gen_program_mul, args=(pid, dirname))
+            except KeyboardInterrupt:
+                self.stopped = True
+
+        def process_res(start_index: int,
+                        res: list[ApplyResult[ProgramRes | None] | None],
+                        testdir: str, batch: int) -> None:
+            # TODO: Successful tasks return ProgramRes; interrupted None results remain unfiltered
+            results = [r.get() for r in res]
+            batch_time, batch_escalations = self._batch_metrics(start_index, results)
+
+            def update(res: OracleResult) -> None:
+                self.reporting.update_stats(
+                    res, batch, batch_time, batch_escalations)
+
+            try:
+                oracles = self._batch_oracles(start_index, results)
+                if self.options.dry_run:
+                    return update(({}, 0, {}, {}))
+                pool.apply_async(check_oracle_mul,
+                                 args=(testdir, oracles),
+                                 callback=update)
+            except KeyboardInterrupt:
+                self.stopped = True
+
+        try:
+            self._run(process_program, process_res, compiler_version)
+            pool.close()
+            pool.join()
+        except KeyboardInterrupt:
+            try:
+                pool.terminate()
+                pool.join()
+            except Exception:
+                pass
+        self._finish()
+
+    def worker_inputs(self, compiler_version: str) -> WorkerInputs[S]:
+        return WorkerInputs(RunOptions.from_namespace(self.options),
+                            snapshot_generator_config(), compiler_version,
+                            self.compiler_cls, self.compiler_settings)
+
+
+def _create_worker_scheduler[S](resources: WorkerResources[S]) -> Scheduler[S]:
+    options = resources.options
+    artifacts = Artifacts(options)
+    generation = Generation(options, artifacts, resources.manager)
+    compilation = Compilation(
+        options, artifacts, {options.language: resources.compiler_cls},
+        settings=resources.compiler_settings)
+    coverage = LiveCoverage(options, compilation)
+    timing = TimingMetrics(options)
+    evaluation = Evaluation(
+        options, compilation, artifacts, coverage, timing, resources.manager)
+    return Scheduler(options, generation, evaluation, timing, resources.compiler_cls,
+                     compiler_settings=resources.compiler_settings)
+
+
+def initialize_scheduler_worker[S](inputs: WorkerInputs[S]) -> None:
+    initialize_worker(inputs, scheduler_factory=_create_worker_scheduler)
+
+
+def _worker_scheduler() -> Scheduler:
+    scheduler = get_worker_resources().scheduler
+    if scheduler is None:
+        raise RuntimeError('Worker scheduler has not been initialized')
+    return scheduler
+
+
+def gen_program_mul(pid: int, dirname: str) -> ProgramRes | None:
+    scheduler = _worker_scheduler()
+    if scheduler.stopped:
+        return
+    try:
+        utils.random.r.seed()
+        return scheduler.generation.gen_program(pid, dirname)
+    except KeyboardInterrupt:
+        scheduler.stopped = True
+
+
+def check_oracle_mul(dirname: str,
+                     oracles: Mapping[int, ProgramRes]) -> OracleResult:
+    scheduler = _worker_scheduler()
+    if scheduler.stopped:
+        return {}, 0, {}, {}
+    try:
+        return scheduler.evaluation.check_oracle(dirname, oracles)
+    except KeyboardInterrupt:
+        scheduler.stopped = True
+        return {}, 0, {}, {}
+    except Exception as exc:
+        if scheduler.options.print_stacktrace:
+            err = str(traceback.format_exc())
+        else:
+            err = str(exc)
+        print('Internal error while checking the oracle')
+        print(err)
+        return {}, 0, {}, {}
