@@ -1,9 +1,11 @@
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 import functools
 import multiprocessing as mp
-from multiprocessing.pool import ApplyResult
+from multiprocessing.pool import Pool
 import os
+from queue import Empty, Queue
 import shutil
 import tempfile
 import time
@@ -23,6 +25,39 @@ from src.modules.worker import (
     initialize_worker, snapshot_generator_config,
 )
 from src.generators.generator import EscalationLog
+
+
+@dataclass
+class _Batch:
+    start_index: int
+    size: int
+    directory: str
+    results: dict[int, ProgramRes] = field(default_factory=dict)
+
+    def ordered_results(self) -> list[ProgramRes]:
+        return [self.results[pid]
+                for pid in range(self.start_index, self.start_index + self.size)]
+
+
+@dataclass(frozen=True)
+class _GenerationCompleted:
+    batch: _Batch
+    pid: int
+    result: ProgramRes | None
+
+
+@dataclass(frozen=True)
+class _CompilationCompleted:
+    batch: _Batch
+    result: OracleResult
+
+
+@dataclass(frozen=True)
+class _TaskFailed:
+    error: BaseException
+
+
+type _Completion = _GenerationCompleted | _CompilationCompleted | _TaskFailed
 
 
 class Scheduler[S]:
@@ -129,51 +164,120 @@ class Scheduler[S]:
         self._finish()
 
     def run_parallel(self, compiler_version: str) -> None:
-
+        batches: dict[int, _Batch] = {}
         pool = mp.Pool(
             self.options.workers,
             initializer=initialize_scheduler_worker,
             initargs=(self.worker_inputs(compiler_version),))
 
-        def process_program(pid: int, dirname: str
-                            ) -> ApplyResult[ProgramRes | None] | None:
-            try:
-                return pool.apply_async(gen_program_mul, args=(pid, dirname))
-            except KeyboardInterrupt:
-                self.stopped = True
-
-        def process_res(start_index: int,
-                        res: list[ApplyResult[ProgramRes | None] | None],
-                        testdir: str, batch: int) -> None:
-            # TODO: Successful tasks return ProgramRes; interrupted None results remain unfiltered
-            results = [r.get() for r in res]
-            batch_time, batch_escalations = self._batch_metrics(start_index, results)
-
-            def update(res: OracleResult) -> None:
-                self.reporting.update_stats(
-                    res, batch, batch_time, batch_escalations)
-
-            try:
-                oracles = self._batch_oracles(start_index, results)
-                if self.options.dry_run:
-                    return update(({}, 0, {}, {}))
-                pool.apply_async(check_oracle_mul,
-                                 args=(testdir, oracles),
-                                 callback=update)
-            except KeyboardInterrupt:
-                self.stopped = True
-
         try:
-            self._run(process_program, process_res, compiler_version)
+            self._run_parallel(pool, compiler_version, batches)
             pool.close()
             pool.join()
         except KeyboardInterrupt:
-            try:
-                pool.terminate()
-                pool.join()
-            except Exception:
-                pass
+            self.stopped = True
+            pool.terminate()
+            pool.join()
+        except BaseException:
+            pool.terminate()
+            pool.join()
+            raise
+        finally:
+            # Sources must remain available until all workers have stopped.
+            for batch in batches.values():
+                shutil.rmtree(batch.directory, ignore_errors=True)
+                for pid in range(batch.start_index, batch.start_index + batch.size):
+                    shutil.rmtree(os.path.join(
+                        self.options.test_directory, 'tmp', str(pid)),
+                        ignore_errors=True)
         self._finish()
+
+    def _run_parallel(self, pool: Pool, compiler_version: str,
+                      batches: dict[int, _Batch]) -> None:
+        self.reporting.logging(compiler_version)
+        completions: Queue[_Completion] = Queue()
+        generations: deque[tuple[_Batch, int]] = deque()
+        compilations: deque[_Batch] = deque()
+        iteration = 1
+        active = 0
+        start_time = time.perf_counter()
+
+        def finish_batch(batch: _Batch, result: OracleResult) -> None:
+            batch_time, escalations = self._batch_metrics(
+                batch.start_index, batch.ordered_results())
+            self.reporting.update_stats(result, batch.size, batch_time, escalations)
+            shutil.rmtree(batch.directory, ignore_errors=True)
+            del batches[batch.start_index]
+
+        def complete(event: _Completion) -> None:
+            nonlocal active
+            active -= 1
+            if isinstance(event, _TaskFailed):
+                raise event.error
+            if isinstance(event, _CompilationCompleted):
+                finish_batch(event.batch, event.result)
+                return
+            if event.result is None:
+                raise KeyboardInterrupt
+            batch = event.batch
+            batch.results[event.pid] = event.result
+            if len(batch.results) == batch.size:
+                if self.options.dry_run:
+                    finish_batch(batch, ({}, 0, {}, {}))
+                else:
+                    compilations.append(batch)
+
+        def drain_completions() -> None:
+            while True:
+                try:
+                    event = completions.get_nowait()
+                except Empty:
+                    return
+                complete(event)
+
+        def task_failed(error: BaseException) -> None:
+            completions.put(_TaskFailed(error))
+
+        while True:
+            drain_completions()
+            while active < self.options.workers:
+                # Process publications and ready compilations before refilling
+                # the pool. Callbacks only notify; the parent owns reporting.
+                drain_completions()
+                if compilations:
+                    batch = compilations.popleft()
+                    oracles = self._batch_oracles(
+                        batch.start_index, batch.ordered_results())
+                    pool.apply_async(
+                        check_oracle_mul, args=(batch.directory, oracles),
+                        callback=lambda result, batch=batch: completions.put(
+                            _CompilationCompleted(batch, result)),
+                        error_callback=task_failed)
+                elif generations:
+                    batch, pid = generations.popleft()
+                    pool.apply_async(
+                        gen_program_mul,
+                        args=(pid, os.path.join(batch.directory, 'src')),
+                        callback=lambda result, batch=batch, pid=pid: completions.put(
+                            _GenerationCompleted(batch, pid, result)),
+                        error_callback=task_failed)
+                elif (len(batches) < self.options.workers and
+                      self.stop_condition(iteration, time.perf_counter() - start_time)):
+                    # Bound both submitted tasks and live batch directories.
+                    # A batch remains live through compilation, not just generation.
+                    size = self.get_batches(iteration - 1)
+                    batch = _Batch(iteration, size, tempfile.mkdtemp())
+                    batches[iteration] = batch
+                    generations.extend((batch, pid)
+                                       for pid in range(iteration, iteration + size))
+                    iteration += size
+                    continue
+                else:
+                    break
+                active += 1
+            if not active:
+                return
+            complete(completions.get())
 
     def worker_inputs(self, compiler_version: str) -> WorkerInputs[S]:
         return WorkerInputs(RunOptions.from_namespace(self.options),
