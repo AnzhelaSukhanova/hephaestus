@@ -239,13 +239,14 @@ def test_scheduling_logs_and_aggregates_with_parent_reporting(
     events = []
     logging = reporter.logging
     update_stats = reporter.update_stats
-    run = fuzzer.scheduler._run
+    loop_name = '_run' if method is None else '_run_parallel'
+    run = getattr(fuzzer.scheduler, loop_name)
     finish = fuzzer.scheduler._finish
 
     def record_run(*args):
         assert os.getpid() == parent_pid
         assert fuzzer.scheduler.reporting is reporter
-        events.append(('_run', os.getpid()))
+        events.append((loop_name, os.getpid()))
         run(*args)
 
     def record_logging(version):
@@ -264,7 +265,7 @@ def test_scheduling_logs_and_aggregates_with_parent_reporting(
         finish()
 
     with (
-        patch.object(fuzzer.scheduler, '_run', side_effect=record_run) as loop,
+        patch.object(fuzzer.scheduler, loop_name, side_effect=record_run) as loop,
         patch.object(fuzzer.scheduler, '_finish', side_effect=record_finish) as final,
         patch.object(reporter, 'logging', side_effect=record_logging) as log,
         patch.object(reporter, 'update_stats', side_effect=record_update) as update,
@@ -274,7 +275,7 @@ def test_scheduling_logs_and_aggregates_with_parent_reporting(
     final.assert_called_once_with()
     log.assert_called_once_with('hermetic compiler 1.0')
     assert update.call_count == 2
-    assert events == [('_run', parent_pid), ('logging', parent_pid),
+    assert events == [(loop_name, parent_pid), ('logging', parent_pid),
                       ('update_stats', parent_pid), ('update_stats', parent_pid),
                       ('_finish', parent_pid)]
     assert reporter.stats['totals'] == {'passed': 2, 'failed': 0}
