@@ -43,7 +43,8 @@ def assert_command(arguments: list[str], backend: str, source: Path,
                    module: str, dependencies: list[str]) -> None:
     assert_arguments(arguments)
     assert all(Path(path).is_absolute() for path in dependencies)
-    expected = [str(source)]
+    expected = [str(source),
+                '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath']
     if backend == 'native':
         expected += ['-produce', 'library', '-o', module,
                      '-nowarn', '-Xklib-ir-inliner=full']

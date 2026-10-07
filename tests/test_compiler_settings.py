@@ -47,6 +47,7 @@ def test_kotlin_default_settings():
     default = KotlinCompiler('src')
     explicit = KotlinCompiler('src', settings=KotlinSettings())
     command = ['$HOME/kotlin/kotlin-native/dist/bin/kotlinc-native', 'src',
+               '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
                '-produce', 'library', '-o', 'src', '-nowarn',
                '-Xklib-ir-inliner=full']
     assert default.get_compiler_cmd() == explicit.get_compiler_cmd() == command
@@ -63,7 +64,9 @@ def test_explicit_kotlin_commands(backend, dump_ir):
     compiler = KotlinCompiler('src', ['filter'], ['direct.klib', 'indirect.klib'],
                               ['direct.klib'], 'module', settings=settings)
     if backend == 'native':
-        command = ['/custom/kotlinc', 'src', '-produce', 'library', '-o',
+        command = ['/custom/kotlinc', 'src',
+                   '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
+                   '-produce', 'library', '-o',
                    'module', '-nowarn', '-Xklib-ir-inliner=full',
                    '-library', 'direct.klib', '-library', 'indirect.klib',
                    '-friend-modules', 'direct.klib']
@@ -71,7 +74,9 @@ def test_explicit_kotlin_commands(backend, dump_ir):
         stdlib = ('$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-' +
                   ('wasm-' if backend == 'wasm' else '') +
                   'js-2.4.255-SNAPSHOT.klib')
-        command = ['/custom/kotlinc', 'src', '-Xir-produce-klib-file',
+        command = ['/custom/kotlinc', 'src',
+                   '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
+                   '-Xir-produce-klib-file',
                    '-ir-output-dir', '.', '-ir-output-name', 'module',
                    '-libraries', os.pathsep.join([
                        stdlib, 'direct.klib', 'indirect.klib']),
