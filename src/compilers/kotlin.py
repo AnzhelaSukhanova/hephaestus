@@ -68,14 +68,15 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
 
     def _get_compiler_cmd(self, input_name: str) -> list[str]:
         compiler = _compiler_executable(self.settings)
+        command = [compiler, input_name,
+                   '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath']
         if self.settings.backend == 'native':
-            command = [compiler, input_name, '-produce', 'library',
-                       '-o', self.module_name or input_name,
-                       '-nowarn', '-Xklib-ir-inliner=full']
+            command.extend(['-produce', 'library',
+                            '-o', self.module_name or input_name,
+                            '-nowarn', '-Xklib-ir-inliner=full'])
             command.extend(self._native_dependency_flags())
             return command
         else:
-            command = [compiler, input_name]
             if self.module_name:
                 # The KLIB is written next to the sources of this node, so
                 # its name is the module's own name.
