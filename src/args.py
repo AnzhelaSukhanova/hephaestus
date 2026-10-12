@@ -126,6 +126,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Select Kotlin backend"
     )
     parser.add_argument(
+        '--oracle', default='compilation',
+        choices=['compilation', 'backend-comparison'],
+        help='Compilation expectations or Kotlin JS/Native/Wasm agreement')
+    parser.add_argument(
         "--max-type-params",
         type=int,
         default=None,
@@ -296,6 +300,14 @@ def configure_generator(options: argparse.Namespace) -> None:
 
 def validate_args(args):
     # CHECK ARGUMENTS
+    if args.oracle == 'backend-comparison':
+        if args.language != 'kotlin':
+            sys.exit('Error: backend-comparison requires Kotlin')
+        if args.batch != 1:
+            sys.exit('Error: backend-comparison requires --batch 1')
+        if args.rerun or args.dump_ir or args.jacoco_lowerings or args.jacoco_always:
+            #TODO: Live JaCoCo might be helpful, add in the future if all works out
+            sys.exit('Error: backend-comparison does not support --rerun, --dump-ir or live JaCoCo')
 
     #TODO: Since for crossmodule support, a lot of calls become qualified, emitting
     # `package src.d<pid>_inc` doesn't make sense anymore as all objects are still internally named `src.d<pid>.f()`. We
