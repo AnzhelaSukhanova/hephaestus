@@ -1,13 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import Literal
-
-
-@dataclass(frozen=True)
-class OracleFinding:
-    kind: Literal['crash', 'unexpected_rejection', 'unexpected_acceptance']
-    program: str | None
-    diagnostics: tuple[str, ...]
+from src.oracles.models import OracleFinding
 
 
 def check_compilation(
