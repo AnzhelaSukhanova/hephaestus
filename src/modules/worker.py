@@ -5,16 +5,18 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from src import utils
 from src.compilers.base import BaseCompiler
 from src.generators.config import ConfigOverrideValue, cfg
+from src.modules.oracle_modes import OracleMode
 from src.modules.crossmodule import CrossModuleManager
 
 
 if TYPE_CHECKING:
+    from src.compilers.kotlin import KotlinBackend, KotlinSettings
     from src.modules.scheduler import Scheduler
 
 
@@ -28,7 +30,8 @@ class RunOptions(argparse.Namespace):
     name: str
     test_directory: str
     language: str
-    backend: str
+    backend: KotlinBackend
+    oracle: str
     options: Mapping[str, Mapping[str, int]]
 
     @classmethod
@@ -45,6 +48,9 @@ class WorkerInputs[S]:
     compiler_version: str
     compiler_cls: type[BaseCompiler[S]]
     compiler_settings: S
+    mode: OracleMode
+    settings_by_variant: Mapping[str, S] | None = None
+    versions_by_variant: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -53,7 +59,10 @@ class WorkerResources[S]:
     manager: CrossModuleManager
     compiler_cls: type[BaseCompiler[S]]
     compiler_settings: S
+    mode: OracleMode
     scheduler: Scheduler[S] | None = None
+    settings_by_variant: Mapping[str, S] | None = None
+    versions_by_variant: Mapping[str, str] = field(default_factory=dict)
 
 
 _worker_resources: WorkerResources | None = None
@@ -65,7 +74,10 @@ def _no_manifest_depends(klib_path: str) -> set[str] | None:
 
 
 def create_manager[S](options: RunOptions, compiler_version: str,
-                      compiler_cls: type[BaseCompiler[S]]) -> CrossModuleManager:
+                      compiler_cls: type[BaseCompiler[S]], *,
+                      settings_by_variant: Mapping[str, KotlinSettings] | None = None,
+                      versions_by_variant: Mapping[str, str] | None = None
+                      ) -> CrossModuleManager:
     return CrossModuleManager(
         test_directory=options.test_directory,
         config=cfg,
@@ -75,6 +87,8 @@ def create_manager[S](options: RunOptions, compiler_version: str,
             compiler_cls, 'read_manifest_depends', _no_manifest_depends),
         random_source=utils.random,
         load_program=utils.load_program,
+        settings_by_variant=settings_by_variant,
+        versions_by_variant=versions_by_variant,
     )
 
 
@@ -91,10 +105,16 @@ def initialize_worker[S](
     cfg.json_config(inputs.generator_config)
     options = RunOptions.from_namespace(inputs.options)
     utils.random.remove_reserved_words(options.language)
+    # Only backend comparison publishes per-variant bundles.
+    manager = create_manager(
+        options, inputs.compiler_version, inputs.compiler_cls,
+        settings_by_variant=(inputs.settings_by_variant
+                             if inputs.mode.compares_variants() else None),
+        versions_by_variant=inputs.versions_by_variant)
     resources = WorkerResources(
-        options, create_manager(options, inputs.compiler_version,
-                                inputs.compiler_cls), inputs.compiler_cls,
-        inputs.compiler_settings)
+        options, manager, inputs.compiler_cls, inputs.compiler_settings, inputs.mode,
+        settings_by_variant=inputs.settings_by_variant,
+        versions_by_variant=inputs.versions_by_variant)
     if scheduler_factory is not None:
         resources = replace(resources, scheduler=scheduler_factory(resources))
     _worker_resources = resources
