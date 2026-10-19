@@ -9,7 +9,6 @@ from queue import Empty, Queue
 import shutil
 import tempfile
 import time
-import traceback
 
 from src import utils
 from src.compilers.base import BaseCompiler
@@ -19,7 +18,7 @@ from src.modules.coverage import LiveCoverage
 from src.modules.evaluation import Evaluation
 from src.modules.generation import Generation
 from src.modules.models import ProgramRes, OracleResult
-from src.modules.worker_reporting import TimingMetrics
+from src.modules.worker_reporting import Reporting
 from src.modules.worker import (
     RunOptions, WorkerInputs, WorkerResources, get_worker_resources,
     initialize_worker, snapshot_generator_config,
@@ -49,7 +48,7 @@ class _GenerationCompleted:
 @dataclass(frozen=True)
 class _CompilationCompleted:
     batch: _Batch
-    result: OracleResult
+    result: OracleResult | None
 
 
 @dataclass(frozen=True)
@@ -63,7 +62,7 @@ type _Completion = _GenerationCompleted | _CompilationCompleted | _TaskFailed
 class Scheduler[S]:
     def __init__(
             self, options: RunOptions, generation: Generation,
-            evaluation: Evaluation[S], reporting: TimingMetrics,
+            evaluation: Evaluation[S], reporting: Reporting,
             compiler_cls: type[BaseCompiler[S]], *,
             compiler_settings: S) -> None:
         self.options = options
@@ -142,6 +141,7 @@ class Scheduler[S]:
             shutil.rmtree(path)
         print()
         print("Total faults: " + str(self.reporting.stats['totals']['failed']))
+        print("Total inconclusive: " + str(self.reporting.stats['totals']['inconclusive']))
 
     def run(self, compiler_version: str) -> None:
 
@@ -152,10 +152,13 @@ class Scheduler[S]:
                         testdir: str, batch: int) -> None:
             oracles = self._batch_oracles(start_index, res)
             batch_time, batch_escalations = self._batch_metrics(start_index, res)
+            result = (self.evaluation.skipped_compilation_result(testdir, oracles)
+                      if self.options.dry_run else
+                      self.evaluation.check_oracle_safely(testdir, oracles))
             self.reporting.update_stats(
-                ({}, 0, {}, {}) if self.options.dry_run
-                else self.evaluation.check_oracle(testdir, oracles),
+                result,
                 batch, batch_time, batch_escalations)
+            shutil.rmtree(testdir, ignore_errors=True)
 
         try:
             self._run(process_program, process_res, compiler_version)
@@ -215,6 +218,8 @@ class Scheduler[S]:
             if isinstance(event, _TaskFailed):
                 raise event.error
             if isinstance(event, _CompilationCompleted):
+                if event.result is None:
+                    raise KeyboardInterrupt
                 finish_batch(event.batch, event.result)
                 return
             if event.result is None:
@@ -223,7 +228,11 @@ class Scheduler[S]:
             batch.results[event.pid] = event.result
             if len(batch.results) == batch.size:
                 if self.options.dry_run:
-                    finish_batch(batch, ({}, 0, {}, {}))
+                    oracles = self._batch_oracles(
+                        batch.start_index, batch.ordered_results())
+                    result = self.evaluation.skipped_compilation_result(
+                        batch.directory, oracles)
+                    finish_batch(batch, result)
                 else:
                     compilations.append(batch)
 
@@ -282,7 +291,10 @@ class Scheduler[S]:
     def worker_inputs(self, compiler_version: str) -> WorkerInputs[S]:
         return WorkerInputs(RunOptions.from_namespace(self.options),
                             snapshot_generator_config(), compiler_version,
-                            self.compiler_cls, self.compiler_settings)
+                            self.compiler_cls, self.compiler_settings,
+                            self.evaluation.mode,
+                            self.evaluation.compilation.settings_by_variant,
+                            self.evaluation.compilation.versions_by_variant)
 
 
 def _create_worker_scheduler[S](resources: WorkerResources[S]) -> Scheduler[S]:
@@ -291,11 +303,14 @@ def _create_worker_scheduler[S](resources: WorkerResources[S]) -> Scheduler[S]:
     generation = Generation(options, artifacts, resources.manager)
     compilation = Compilation(
         options, artifacts, {options.language: resources.compiler_cls},
-        settings=resources.compiler_settings)
+        settings=resources.compiler_settings,
+        settings_by_variant=resources.settings_by_variant,
+        versions_by_variant=resources.versions_by_variant)
     coverage = LiveCoverage(options, compilation)
-    timing = TimingMetrics(options)
+    timing = Reporting(options, resources.manager)
     evaluation = Evaluation(
-        options, compilation, artifacts, coverage, timing, resources.manager)
+        options, compilation, artifacts, coverage, timing, resources.manager,
+        mode=resources.mode)
     return Scheduler(options, generation, evaluation, timing, resources.compiler_cls,
                      compiler_settings=resources.compiler_settings)
 
@@ -323,20 +338,12 @@ def gen_program_mul(pid: int, dirname: str) -> ProgramRes | None:
 
 
 def check_oracle_mul(dirname: str,
-                     oracles: Mapping[int, ProgramRes]) -> OracleResult:
+                     oracles: Mapping[int, ProgramRes]) -> OracleResult | None:
     scheduler = _worker_scheduler()
     if scheduler.stopped:
-        return {}, 0, {}, {}
+        return None
     try:
-        return scheduler.evaluation.check_oracle(dirname, oracles)
+        return scheduler.evaluation.check_oracle_safely(dirname, oracles)
     except KeyboardInterrupt:
         scheduler.stopped = True
-        return {}, 0, {}, {}
-    except Exception as exc:
-        if scheduler.options.print_stacktrace:
-            err = str(traceback.format_exc())
-        else:
-            err = str(exc)
-        print('Internal error while checking the oracle')
-        print(err)
-        return {}, 0, {}, {}
+        return None
