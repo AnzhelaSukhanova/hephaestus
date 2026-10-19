@@ -110,7 +110,7 @@ class Generation:
             dependency = self.manager.prepare_dependency(pid)
 
         direct_dependency_pid = dependency['pid'] if dependency else None
-        dep_transitive_closure_klibs = dependency['klibs'] if dependency else None
+        dep_transitive_closure_pids = tuple(dependency['closure']) if dependency else ()
         translator = TRANSLATORS[self.options.language](
             generation_package,
             self.options.options['Translator'])
@@ -161,8 +161,10 @@ class Generation:
                     stats['error'] = incorrect_program[1]
                     stats['programs'][incorrect_program[0]] = False
             return ProgramRes(
-                False, stats, direct_dependency_pid,
-                dep_transitive_closure_klibs)
+                failed=False,
+                stats=stats,
+                direct_dependency_pid=direct_dependency_pid,
+                dep_transitive_closure_pids=dep_transitive_closure_pids)
         except Exception as exc:
             # This means that we have programming error in transformations
             err = ''
@@ -180,5 +182,7 @@ class Generation:
                 'time': 0
             }
             return ProgramRes(
-                True, stats, direct_dependency_pid,
-                dep_transitive_closure_klibs)
+                failed=True,
+                stats=stats,
+                direct_dependency_pid=direct_dependency_pid,
+                dep_transitive_closure_pids=dep_transitive_closure_pids)
