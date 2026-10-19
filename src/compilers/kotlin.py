@@ -1,17 +1,31 @@
+from __future__ import annotations
+
 import re
 import os
 import zipfile
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from pathlib import Path
+import textwrap
+from types import MappingProxyType
+from typing import Literal
+from urllib.parse import unquote
 
 from src.compilers.base import BaseCompiler
+from src.compilers.results import Diagnostic, ParsedDiagnostics
+
+
+type KotlinBackend = Literal['js', 'native', 'wasm']
 
 
 @dataclass(frozen=True)
 class KotlinSettings:
-    backend: str = 'native'
+    backend: KotlinBackend = 'native'
     dump_ir: bool = False
     executable: str | None = None
+
+
+BACKENDS: tuple[KotlinBackend, ...] = ('js', 'native', 'wasm')
 
 
 def _compiler_executable(settings: KotlinSettings) -> str:
@@ -20,6 +34,13 @@ def _compiler_executable(settings: KotlinSettings) -> str:
     distribution = ('kotlin-native/dist' if settings.backend == 'native'
                     else 'dist/kotlinc')
     return f'$HOME/kotlin/{distribution}/bin/kotlinc-{settings.backend}'
+
+
+KOTLIN_COMPARISON_VARIANTS: Mapping[str, KotlinSettings] = MappingProxyType({
+    'js': KotlinSettings('js'),
+    'native': KotlinSettings('native'),
+    'wasm': KotlinSettings('wasm'),
+})
 
 
 class KotlinCompiler(BaseCompiler[KotlinSettings]):
@@ -49,11 +70,14 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
         # Unique name of produced KLIB, used to refer by consumers.
         self.module_name = module_name
 
-    def get_klib_filename(self) -> str | None:
+    def get_dependency_artifact_filename(self) -> str | None:
         """KLIB file build leaves in its working directory."""
         if not self.module_name:
             return None
         return self.module_name + '.klib'
+
+    def validate_dependency_artifact(self, path: str) -> bool:
+        return self.read_manifest_depends(path) is not None
 
     @classmethod
     def get_compiler_version(
@@ -111,7 +135,7 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
     def _js_dependency_flags(self) -> list[str]:
         if not self.friend_klibs:
             return []
-        return ['-Xfriend-modules', os.pathsep.join(self.friend_klibs)]
+        return [f'-Xfriend-modules={os.pathsep.join(self.friend_klibs)}']
 
     @staticmethod
     def read_manifest_depends(klib_path: str) -> set[str] | None:
