@@ -1,18 +1,18 @@
 import json
 import os
 import shutil
+import hashlib
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from typing import TypedDict
+from dataclasses import asdict
+from typing import NotRequired, TypedDict
 
 from src.generators.config import GenConfig
 from src.ir import ast
 from src.ir.context import Context
 from src.utils import RandomUtils
-
-
-class LedgerRecord(TypedDict):
-    direct: int | None
-    closure: list[int]
+from src.compilers.results import VariantObservation
+from src.compilers.kotlin import KotlinSettings
 
 
 class ManifestDiff(TypedDict):
@@ -21,8 +21,27 @@ class ManifestDiff(TypedDict):
     unexpected: list[str]
 
 
-class PublicationRecord(LedgerRecord, total=False):
-    manifest_diff: ManifestDiff
+class PublicationRecord(TypedDict):
+    direct: int | None
+    closure: list[int]
+    variants: NotRequired[dict[str, 'VariantPublication']]
+    # Diagnostics travel with the record to the parent, but never enter the ledger.
+    manifest_diff: NotRequired[ManifestDiff]
+    variant_manifest_diff: NotRequired[dict[str, ManifestDiff]]
+
+
+DIAGNOSTIC_RECORD_KEYS = ('manifest_diff', 'variant_manifest_diff')
+
+
+class VariantPublication(TypedDict):
+    backend: str
+    module_name: str
+    klib: str
+    metadata: str
+
+
+class PublicationError(RuntimeError):
+    pass
 
 
 class KlibMetadata(TypedDict):
@@ -31,13 +50,13 @@ class KlibMetadata(TypedDict):
     compiler_version: str
     flags: list[str]
     backend: str
+    manifest_diff: NotRequired[ManifestDiff]
 
 
 class PreparedDependency(TypedDict):
     pid: int
     context: Context
     closure: list[int]
-    klibs: list[str]
 
 
 class CrossModuleManager:
@@ -46,7 +65,9 @@ class CrossModuleManager:
                  backend: str, compiler_version: str,
                  read_manifest_depends: Callable[[str], set[str] | None],
                  random_source: RandomUtils,
-                 load_program: Callable[[str], ast.Program | None]) -> None:
+                 load_program: Callable[[str], ast.Program | None], *,
+                 settings_by_variant: Mapping[str, KotlinSettings] | None = None,
+                 versions_by_variant: Mapping[str, str] | None = None) -> None:
         self.test_directory: str = test_directory
         self.config: GenConfig = config
         self.backend: str = backend
@@ -54,6 +75,12 @@ class CrossModuleManager:
         self.read_manifest_depends: Callable[[str], set[str] | None] = read_manifest_depends
         self.random: RandomUtils = random_source
         self.load_program: Callable[[str], ast.Program | None] = load_program
+        # Backend comparison publishes one KLIB per configured variant_id, built
+        # with these settings by the compiler versions recorded at startup.
+        self.settings_by_variant: Mapping[str, KotlinSettings] | None = (
+            dict(settings_by_variant) if settings_by_variant is not None else None)
+        self.versions_by_variant: Mapping[str, str] = dict(versions_by_variant or {})
+        self._source_identity_cache: dict[int, str] = {}
 
     def enabled(self) -> bool:
         return bool(self.config.prob.crossmodule_probability)
@@ -63,6 +90,7 @@ class CrossModuleManager:
 
     def load_ledger(self) -> dict[str, object]:
         """Load the pid-to-dependency ledger, tolerating its first absence."""
+        self._source_identity_cache = {}
         try:
             with open(self.ledger_path(), 'r') as ledger_file:
                 ledger: object = json.load(ledger_file)
@@ -78,17 +106,110 @@ class CrossModuleManager:
             json.dump(ledger, out, indent=2)
         os.replace(ledger_path + '.tmp', ledger_path)
 
+    def commit_publications(self, publications: Mapping[int, PublicationRecord]) -> None:
+        """Advertise published providers by merging them into the ledger.
+
+        Only the parent commits, and only records whose artifacts were already
+        published. Existing entries are kept, and the ledger is replaced
+        atomically. Manifest disagreements are reported here, but the ledger
+        holds only the graph.
+        """
+        if not publications:
+            return
+        ledger = self.load_ledger()
+        for pid, record in publications.items():
+            ledger[str(pid)] = {key: value for key, value in record.items()
+                                if key not in DIAGNOSTIC_RECORD_KEYS}
+            diff = record.get('manifest_diff')
+            if diff is not None:
+                print('\nProgram {} records dependencies outside its '
+                      'closure: {}'.format(pid, diff['unexpected']))
+            for variant_id, variant_diff in record.get('variant_manifest_diff', {}).items():
+                print('\nProgram {} ({}) records dependencies outside its '
+                      'closure: {}'.format(pid, variant_id, variant_diff['unexpected']))
+        self.save_ledger(ledger)
+
     def published_klibs_dir(self) -> str:
         return os.path.join(self.test_directory, 'klibs')
 
-    def published_klib_path(self, pid: int) -> str:
+    def published_klib_path(self, pid: int, variant_id: str | None = None) -> str:
         """Where a published KLIB lives; consumers reference it in place."""
+        if variant_id is not None:
+            return os.path.join(self.test_directory,
+                                self._variant_file(pid, variant_id, '.klib'))
         return os.path.join(self.published_klibs_dir(),
-                            'd' + str(pid) + '.klib')
+                            f'd{pid}.klib')
+
+    @staticmethod
+    def _variant_file(pid: int, variant_id: str, suffix: str) -> str:
+        """Variant artifacts are named by their variant_id, not by their backend."""
+        return os.path.join('klibs', f'd{pid}-{variant_id}{suffix}')
+
+    def variant_publication(self, pid: int, variant_id: str) -> VariantPublication:
+        return {'backend': self.settings_by_variant[variant_id].backend,
+                'module_name': f'd{pid}',
+                'klib': self._variant_file(pid, variant_id, '.klib'),
+                'metadata': self._variant_file(pid, variant_id, '.meta.json')}
+
+    def _source_identity(self, pid: int, source: str) -> str:
+        identity = self._source_identity_cache.get(pid)
+        if identity is None:
+            with open(source, 'rb') as source_file:
+                identity = hashlib.sha256(source_file.read()).hexdigest()
+            self._source_identity_cache[pid] = identity
+        return identity
+
+    def _validate_variant(self, ledger: Mapping[str, object], pid: int,
+                          variant_id: str) -> str | None:
+        record = self._ledger_record(ledger, pid)
+        if self.settings_by_variant is None:
+            return 'No backend comparison variants are configured'
+        variants = record.get('variants')
+        if (not isinstance(variants, dict)
+                or set(variants) != set(self.settings_by_variant)):
+            return f'd{pid}: no committed complete comparison bundle'
+        expected = self.variant_publication(pid, variant_id)
+        if variants.get(variant_id) != expected:
+            return f'd{pid}/{variant_id}: incompatible artifact identity'
+        source = os.path.join(self.test_directory, str(pid), 'program.kt')
+        try:
+            with open(os.path.join(self.test_directory, expected['metadata'])) as metadata:
+                meta = json.load(metadata)
+            identity = self._source_identity(pid, source)
+            if (not isinstance(meta, dict) or meta.get('pid') != pid
+                    or meta.get('backend') != expected['backend']
+                    or meta.get('module_name') != f'd{pid}'
+                    or meta.get('settings') != asdict(self.settings_by_variant[variant_id])
+                    or meta.get('compiler_version') != self.versions_by_variant.get(variant_id)
+                    or meta.get('source_identity') != identity):
+                return f'd{pid}/{variant_id}: incompatible or stale metadata'
+            if not os.path.isfile(source + '.bin'):
+                return f'd{pid}: missing provider pickle'
+            klib = os.path.join(self.test_directory, expected['klib'])
+            if self.read_manifest_depends(klib) is None:
+                return f'd{pid}/{variant_id}: missing or unusable dependency KLIB'
+        except (OSError, json.JSONDecodeError):
+            return f'd{pid}/{variant_id}: unavailable provider artifacts'
+        return None
+
+    def resolve_variant_dependencies(self, closure: Sequence[int], variant_id: str
+                                     ) -> tuple[list[str], str | None]:
+        ledger = self.load_ledger()
+        paths = []
+        for pid in closure:
+            reason = self._validate_variant(ledger, pid, variant_id)
+            if reason:
+                return paths, reason
+            paths.append(os.path.abspath(self.published_klib_path(pid, variant_id)))
+        return paths, None
 
     def publish_klib(self, pid: int, source_klib: str,
-                     command_args: Sequence[str]) -> str | None:
-        """Retain a per-node KLIB: it is published once and never rebuilt."""
+                     command_args: Sequence[str],
+                     manifest_diff: ManifestDiff | None = None) -> str | None:
+        """Retain a per-node KLIB: it is published once and never rebuilt.
+
+        Its metadata records how it was built and any manifest disagreement.
+        """
         if not os.path.exists(source_klib):
             return None
         klibs_dir = self.published_klibs_dir()
@@ -107,6 +228,8 @@ class CrossModuleManager:
             'flags': [arg for arg in command_args if arg.startswith('-X')],
             'backend': self.backend,
         }
+        if manifest_diff is not None:
+            meta['manifest_diff'] = manifest_diff
         meta_path = os.path.join(klibs_dir, 'd' + str(pid) + '.meta.json')
         with open(meta_path + '.tmp', 'w') as out:
             json.dump(meta, out, indent=2)
@@ -114,7 +237,7 @@ class CrossModuleManager:
         return dst
 
     def manifest_closure_diff(self, klib_path: str, closure: Sequence[int],
-                              dropped: Sequence[int | str] | None = None
+                              dropped: Sequence[int] | None = None
                               ) -> ManifestDiff | None:
         """Compare a KLIB's manifest dependencies against the ledger closure.
 
@@ -188,13 +311,23 @@ class CrossModuleManager:
                 continue
             provider_pid = int(provider_pid)
             closure = record.get('closure') or []
+            if self.settings_by_variant is not None:
+                if (not isinstance(closure, list)
+                        or any(type(item) is not int for item in closure)
+                        or len(set([provider_pid, *closure])) != len(closure) + 1):
+                    continue
+                if any(self._validate_variant(ledger, item, variant_id)
+                       for item in [provider_pid, *closure]
+                       for variant_id in self.settings_by_variant):
+                    continue
             if max_depth and len(closure) + 2 > max_depth:
                 continue
             binary = os.path.join(self.test_directory, str(provider_pid),
                                   'program.kt.bin')
             if not os.path.isfile(binary):
                 continue
-            if not os.path.exists(self.published_klib_path(provider_pid)):
+            if (self.settings_by_variant is None
+                    and not os.path.exists(self.published_klib_path(provider_pid))):
                 continue
             candidates.append(provider_pid)
         return candidates
@@ -203,8 +336,8 @@ class CrossModuleManager:
         """Seed a new program from a published dependency.
 
         The dependency is reused exactly as published: its pickle seeds the
-        context, and its KLIB, together with the KLIBs of its own closure, is
-        handed to the compiler in place. Nothing is copied or rebuilt.
+        context, and its KLIB closure is checked before the logical IDs are
+        handed to generation. Nothing is copied or rebuilt.
         """
         ledger = self.load_ledger()
         candidates = self.provider_candidates(pid)
@@ -212,10 +345,14 @@ class CrossModuleManager:
             provider_pid = self.random.choice(candidates)
             candidates.remove(provider_pid)
             closure = [provider_pid] + self.ledger_closure(ledger, provider_pid)
-            klibs = [os.path.abspath(self.published_klib_path(item))
-                     for item in closure]
-            if not all(os.path.exists(klib) for klib in klibs):
-                continue
+            if self.settings_by_variant is not None:
+                if any(self._validate_variant(ledger, item, variant_id)
+                       for item in closure for variant_id in self.settings_by_variant):
+                    continue
+            else:
+                klibs = self.dependency_klibs(closure)
+                if not all(os.path.exists(klib) for klib in klibs):
+                    continue
             binary = os.path.join(self.test_directory, str(provider_pid),
                                   'program.kt.bin')
             try:
@@ -233,20 +370,11 @@ class CrossModuleManager:
                 'pid': provider_pid,
                 'context': context,
                 'closure': closure,
-                'klibs': klibs,
             }
         return None
 
-    @staticmethod
-    def _klib_pid(klib_path: str) -> int | str:
-        """The pid a published KLIB belongs to."""
-        stem = os.path.splitext(os.path.basename(str(klib_path)))[0]
-        if stem.startswith('d') and stem[1:].isdigit():
-            return int(stem[1:])
-        return stem
-
-    def apply_drop_knob(self, klibs: Sequence[str]
-                        ) -> tuple[list[str], list[int | str]]:
+    def apply_drop_knob(self, closure: Sequence[int]
+                        ) -> tuple[list[int], list[int]]:
         """Adversarially withhold indirect dependencies from the compiler.
 
         Each indirect KLIB is dropped independently, and only from the command
@@ -254,26 +382,22 @@ class CrossModuleManager:
         to the complete graph. The direct dependency is never dropped.
         """
         prob = self.config.prob.drop_indirect_deps_prob
-        if not prob or len(klibs) < 2:
-            return list(klibs), []
-        kept = [klibs[0]]
-        dropped: list[int | str] = []
-        for klib in klibs[1:]:
+        if not prob or len(closure) < 2:
+            return list(closure), []
+        kept = [closure[0]]
+        dropped: list[int] = []
+        for pid in closure[1:]:
             if self.random.bool(prob):
-                dropped.append(self._klib_pid(klib))
+                dropped.append(pid)
             else:
-                kept.append(klib)
+                kept.append(pid)
         return kept, dropped
 
-    @staticmethod
-    def dependency_klibs(proc_res: list[str] | None) -> list[str]:
-        """A program's dependency closure KLIBs, the direct one first."""
-        klibs = proc_res
-        if klibs is None:
-            return []
-        if isinstance(klibs, (str, os.PathLike)):
-            return [str(klibs)]
-        return [str(path) for path in klibs]
+    def dependency_klibs(self, closure: Sequence[int],
+                         variant_id: str | None = None) -> list[str]:
+        """Resolve a logical dependency closure, preserving its order."""
+        return [os.path.abspath(self.published_klib_path(pid, variant_id))
+                for pid in closure]
 
     def publish_program(self, pid: int) -> ast.Program | None:
         """Publish a program's source and pickle, and return the program.
@@ -301,21 +425,82 @@ class CrossModuleManager:
 
     def publish_provider(self, pid: int, source_klib: str,
                          command_args: Sequence[str], direct: int | None,
-                         dropped: Sequence[int | str] | None = None
+                         dropped: Sequence[int] | None = None
                          ) -> PublicationRecord | None:
         """Publish a complete provider and return its ledger record.
 
         A provider can enter the ledger only after both its KLIB and its
         source/pickle artifacts have been published successfully.
         """
-        published_klib = self.publish_klib(pid, source_klib, command_args)
+        record = self.publication_record(direct)
+        diff = self.manifest_closure_diff(source_klib, record['closure'], dropped)
+        published_klib = self.publish_klib(pid, source_klib, command_args, diff)
         if published_klib is None or not os.path.exists(published_klib):
             return None
         if self.publish_program(pid) is None:
             return None
-        record = self.publication_record(direct)
-        diff = self.manifest_closure_diff(
-            self.published_klib_path(pid), record['closure'], dropped)
         if diff is not None:
             record['manifest_diff'] = diff
+        return record
+
+    def publish_comparison_provider(
+            self, pid: int, observations: Mapping[str, VariantObservation[KotlinSettings]],
+            direct: int | None, closure: Sequence[int],
+            dropped: Sequence[int] = ()) -> PublicationRecord:
+        variant_ids = set(self.settings_by_variant or ())
+        if self.settings_by_variant is None or set(observations) != variant_ids:
+            raise PublicationError('Cannot publish an incomplete backend bundle')
+        if str(pid) in self.load_ledger():
+            raise PublicationError(f'd{pid}: committed provider artifacts are immutable')
+        source_dir = os.path.join(self.test_directory, 'tmp', str(pid))
+        source = os.path.join(source_dir, 'program.kt')
+        if not os.path.isfile(source + '.bin') or self.load_program(source + '.bin') is None:
+            raise PublicationError(f'd{pid}: no usable common provider source/pickle')
+        with open(source, 'rb') as source_file:
+            identity = hashlib.sha256(source_file.read()).hexdigest()
+        record: PublicationRecord = {'direct': direct, 'closure': list(closure), 'variants': {}}
+        diffs = {}
+        os.makedirs(self.published_klibs_dir(), exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f'.bundle-d{pid}-',
+                                         dir=self.published_klibs_dir()) as staging:
+            staged_program = os.path.join(staging, 'program')
+            shutil.copytree(source_dir, staged_program)
+            for variant_id in sorted(variant_ids):
+                variant = observations[variant_id]
+                command = variant.command
+                klib = variant.produced_dependency_artifact_path
+                if (variant.variant_id != variant_id or command is None
+                        or not command.succeeded()
+                        or not variant.dependency_artifact_valid or klib is None
+                        or self.read_manifest_depends(klib) is None):
+                    raise PublicationError(
+                        f'd{pid}/{variant_id}: no usable successful provider output')
+                entry = self.variant_publication(pid, variant_id)
+                staged_klib = os.path.join(staging, os.path.basename(entry['klib']))
+                if os.path.isdir(klib):
+                    shutil.copytree(klib, staged_klib)
+                else:
+                    shutil.copyfile(klib, staged_klib)
+                diff = self.manifest_closure_diff(klib, closure, dropped)
+                # The metadata describes the configuration this KLIB was built with.
+                meta = {'pid': pid, 'backend': variant.settings.backend,
+                        'module_name': f'd{pid}', 'settings': asdict(variant.settings),
+                        'compiler_version': self.versions_by_variant[variant_id],
+                        'command': list(command.command), 'cwd': command.cwd,
+                        'source_identity': identity}
+                if diff:
+                    meta['manifest_diff'] = diff
+                    diffs[variant_id] = diff
+                with open(os.path.join(staging, os.path.basename(entry['metadata'])), 'w') as out:
+                    json.dump(meta, out, indent=2)
+                record['variants'][variant_id] = entry
+            # Only the parent ledger commit makes these staged artifacts discoverable.
+            for entry in record['variants'].values():
+                for key in ('klib', 'metadata'):
+                    os.replace(os.path.join(staging, os.path.basename(entry[key])),
+                               os.path.join(self.test_directory, entry[key]))
+            shutil.copytree(staged_program, os.path.join(self.test_directory, str(pid)),
+                            dirs_exist_ok=True)
+        if diffs:
+            record['variant_manifest_diff'] = diffs
         return record
