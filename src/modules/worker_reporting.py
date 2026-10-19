@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import datetime
 import json
 import os
@@ -6,15 +7,16 @@ import sys
 from typing import Any
 
 from src import utils
-from src.modules.models import ProgramRes, ProgramStats, TimeMetrics, OracleResult
+from src.modules.models import (
+    ComparisonDependencies, OracleResult, ProgramRes, ProgramStats, TimeMetrics,
+)
 from src.modules.worker import RunOptions
-from src.generators.config import cfg
 from src.generators.generator import EscalationLog
 from src.modules.crossmodule import CrossModuleManager
 
 
 def initial_stats(options: RunOptions) -> dict[str, Any]:
-    stats = {
+    return {
     "Info": {
         "stop_cond": options.stop_cond,
         "stop_cond_value": (
@@ -30,21 +32,26 @@ def initial_stats(options: RunOptions) -> dict[str, Any]:
     },
     "totals": {
         "passed": 0,
-        "failed": 0
+        "failed": 0,
+        "inconclusive": 0,
     },
     "time": 0,
     "compilation_time": 0,
     "faults": {},
+    "inconclusive": {},
     "escalations": {},
     "time_metrics": {},
     }
-    if cfg.prob.crossmodule_probability:
-        stats["crossmodule"] = {}
-    return stats
 
 
 TEMPLATE_MSG: str = (u"Test Programs Passed {} / {} \u2714\t\t"
                 "Test Programs Failed {} / {} \u2718\r")
+
+
+def _json_default(value: object) -> object:
+    if isinstance(value, ComparisonDependencies):
+        return asdict(value)
+    raise TypeError(f'Object of type {type(value).__name__} is not JSON serializable')
 
 
 class TimingMetrics:
@@ -81,10 +88,12 @@ class Reporting(TimingMetrics):
         sys.stdout.write('\033[2K\033[1G')
         failed = self.stats['totals']['failed']
         passed = self.stats['totals']['passed']
+        inconclusive = self.stats['totals'].get('inconclusive', 0)
         iterations = (
             self.options.iterations
-            if self.options.iterations else passed + failed)
+            if self.options.iterations else passed + failed + inconclusive)
         msg = TEMPLATE_MSG.format(passed, iterations, failed, iterations)
+        msg = msg.rstrip('\r') + f'  Inconclusive {inconclusive} / {iterations}\r'
         sys.stdout.write(msg)
 
     def logging(self, compiler_version: str) -> None:
@@ -122,59 +131,53 @@ class Reporting(TimingMetrics):
     def save_stats(self) -> None:
         dst_dir = os.path.join(self.options.test_directory)
         faults_file = os.path.join(dst_dir, 'faults.json')
+        inconclusive_file = os.path.join(dst_dir, 'inconclusive.json')
         stats_file = os.path.join(dst_dir, "stats.json")
         escalations_file = os.path.join(dst_dir, "escalations.json")
         time_metrics_file = os.path.join(dst_dir, "time_metrics.json")
         utils.mkdir(dst_dir)
         faults = self.stats.pop('faults')
+        inconclusive = self.stats.pop('inconclusive')
         escalations = self.stats.pop('escalations')
         time_metrics = self.stats.pop('time_metrics')
         with open(faults_file, 'w') as out:
-            json.dump(faults, out, indent=2)
+            json.dump(faults, out, indent=2, default=_json_default)
+        with open(inconclusive_file, 'w') as out:
+            json.dump(inconclusive, out, indent=2, default=_json_default)
         if not self.options.disable_metrics:
             with open(escalations_file, 'w') as out:
                 json.dump(escalations, out, indent=2)
         if self.options.time_metrics:
             with open(time_metrics_file, 'w') as out:
                 json.dump(time_metrics, out, indent=2)
-        if cfg.prob.crossmodule_probability:
-            self.stats.setdefault('crossmodule', {})
         with open(stats_file, 'w') as out:
             json.dump(self.stats, out, indent=2)
-        if cfg.prob.crossmodule_probability:
-            self.manager.save_ledger(self.stats['crossmodule'])
         self.stats['faults'] = faults
+        self.stats['inconclusive'] = inconclusive
         self.stats['escalations'] = escalations
         self.stats['time_metrics'] = time_metrics
 
     def update_stats(self, res: OracleResult, batch: int, batch_time: float,
                      escalations: Mapping[str, list[EscalationLog]] | None = None
                      ) -> None:
-        res, compilation_time, time_metrics, published = res
-        failed = len(res)
-        passed = batch - failed
+        failed = len(res.faults)
+        inconclusive = len(res.inconclusive.keys() - res.faults.keys())
+        passed = batch - failed - inconclusive
         self.stats['totals']['failed'] += failed
         self.stats['totals']['passed'] += passed
+        self.stats['totals']['inconclusive'] += inconclusive
         self.stats["time"] += batch_time
-        self.stats["compilation_time"] += compilation_time
-        self.stats['faults'].update(res)
-        if cfg.prob.crossmodule_probability:
-            # The ledger is the graph's only source of truth, and it is written
-            # here, in the parent, through the atomic save_stats path.
-            ledger = self.stats.setdefault('crossmodule', {})
-            for pid, record in (published or {}).items():
-                # The ledger holds the graph, and a manifest disagreement is a
-                # signal about it rather than part of it.
-                diff = record.pop('manifest_diff', None)
-                ledger[str(pid)] = record
-                if diff is not None:
-                    self.stats.setdefault('crossmodule_manifest_diff', {})[
-                        str(pid)] = diff
-                    print('\nProgram {} records dependencies outside its '
-                          'closure: {}'.format(pid, diff['unexpected']))
+        self.stats["compilation_time"] += res.compilation_time
+        self.stats['faults'].update(res.faults)
+        self.stats['inconclusive'].update({pid: stats for pid, stats in res.inconclusive.items()
+                                           if pid not in res.faults})
+        if res.publications:
+            # Publications exist only when the manager published their
+            # artifacts; the parent commits them to the manager's ledger.
+            self.manager.commit_publications(res.publications)
         if not self.options.disable_metrics:
             self.stats['escalations'].update(escalations or {})
-        self.stats['time_metrics'].update(time_metrics or {})
+        self.stats['time_metrics'].update(res.time_metrics)
         if not self.options.debug:
             self.print_msg()
         self.save_stats()
