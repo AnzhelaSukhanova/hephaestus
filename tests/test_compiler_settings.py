@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 from collections.abc import Collection
+from unittest import mock
 
 import pytest
 
@@ -17,7 +18,7 @@ from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.compilers.scala import ScalaCompiler
 from src.args import parse_args
 from src.modules.artifacts import Artifacts
-from src.modules.compilation import Compilation
+from src.modules.compilation import ORDINARY_VARIANT, Compilation
 from src.modules.models import ProgramRes
 from src.modules.worker import RunOptions
 
@@ -80,8 +81,8 @@ def test_explicit_kotlin_commands(backend, dump_ir):
                    '-ir-output-dir', '.', '-ir-output-name', 'module',
                    '-libraries', os.pathsep.join([
                        stdlib, 'direct.klib', 'indirect.klib']),
-                   '-nowarn', '-Xklib-ir-inliner=full', '-Xfriend-modules',
-                   'direct.klib']
+                   '-nowarn', '-Xklib-ir-inliner=full',
+                   '-Xfriend-modules=direct.klib']
     dump = (['-Xphases-to-dump=' + compiler.IR_MODIFYING_INLINER_PHASES,
              '-Xdump-directory=src/ir'] if dump_ir else [])
     assert compiler.settings is settings
@@ -124,7 +125,22 @@ def test_compilation_keeps_attempt_state_separate(tmp_path):
     assert second.dependency_klibs == ['second.klib']
     assert second.friend_klibs == []
     assert first.settings is second.settings is settings
-    assert compilation.version_command() == ['/custom/kotlinc', '-version']
+    other = KotlinSettings('native', executable='/other/kotlinc')
+    assert compilation.make_compiler('explicit', settings=other).settings is other
+    commands = []
+
+    def probe(arguments, get_stdout=True, cwd=None):
+        commands.append(arguments)
+        return True, '  kotlinc 2.4\n'
+
+    compilation.run_command = probe
+    compilation.discover_versions()
+    assert commands == [['/custom/kotlinc', '-version',
+                         '-ir-output-name', mock.ANY, '-ir-output-dir', mock.ANY]]
+    assert compilation.versions_by_variant == {ORDINARY_VARIANT: 'kotlinc 2.4'}
+    compilation.run_command = lambda arguments, get_stdout=True, cwd=None: (False, 'broken')
+    with pytest.raises(ValueError, match='version probe failed: broken'):
+        compilation.discover_versions()
 
 
 class TracedKotlin(KotlinCompiler):
@@ -142,9 +158,10 @@ class TracedKotlin(KotlinCompiler):
         self.attempts.append(self)
 
     @classmethod
-    def get_compiler_version(cls, settings: KotlinSettings = KotlinSettings()) -> list[str]:
+    def get_compiler_version(cls, settings: KotlinSettings = KotlinSettings(),
+                             scratch_directory: str | None = None) -> list[str]:
         cls.version_settings.append(settings)
-        return super().get_compiler_version(settings)
+        return super().get_compiler_version(settings, scratch_directory)
 
 
 @pytest.mark.parametrize('backend', ['native', 'js', 'wasm'])
@@ -168,8 +185,8 @@ def test_settings_reach_version_enrichment_reruns_and_correct_only_provider(
     settings = KotlinSettings(backend, True, str(tool))
     artifacts = Artifacts(options)
     compilation = Compilation(options, artifacts, {'kotlin': TracedKotlin}, settings=settings)
-    assert compilation.run_command(compilation.version_command()) == (
-        True, 'hermetic compiler 1.0\n')
+    compilation.discover_versions()
+    assert compilation.versions_by_variant == {ORDINARY_VARIANT: 'hermetic compiler 1.0'}
     assert TracedKotlin.version_settings == [settings]
     assert TracedKotlin.version_settings[0] is settings
 
@@ -215,17 +232,20 @@ def test_settings_reach_version_enrichment_reruns_and_correct_only_provider(
     assert provider_attempt.input_name == str(correct)
     assert provider_attempt.settings is settings
     assert provider_attempt.module_name == 'provider'
-    assert provider_attempt.get_klib_filename() == 'provider.klib'
+    assert provider_attempt.get_dependency_artifact_filename() == 'provider.klib'
     assert klib == str(tmp_path / 'provider.klib')
     assert provider_attempt.dependency_klibs == ['direct.klib', 'indirect.klib']
     assert provider_attempt.friend_klibs == ['direct.klib']
     assert provider_command == provider_attempt.get_compiler_cmd()
     assert str(incorrect) not in provider_command
     assert len({id(attempt) for attempt in TracedKotlin.attempts}) == 4
-    expected_commands = [compilation.version_command(), normal.get_compiler_cmd(),
+    commands = [json.loads(line) for line in log.read_text().splitlines()]
+    # The version probe ran once, in a scratch directory only JS/Wasm need.
+    scratch = None if backend == 'native' else commands[0]['arguments'][-1]
+    expected_commands = [KotlinCompiler.get_compiler_version(settings, scratch),
+                         normal.get_compiler_cmd(),
                          normal.get_error_enrichment_cmds(str(correct))['xprofile-phases'],
                          *[attempt.get_compiler_cmd() for attempt in TracedKotlin.attempts[1:]]]
-    commands = [json.loads(line) for line in log.read_text().splitlines()]
     assert [entry['arguments'] for entry in commands] == [
         [os.path.expandvars(arg) for arg in cmd[1:]] for cmd in expected_commands]
     assert commands[1]['cwd'] == commands[2]['cwd'] == commands[-1]['cwd'] == str(tmp_path)
@@ -239,6 +259,7 @@ from src.compilers.java import JavaCompiler
 from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.modules.artifacts import Artifacts
 from src.modules.compilation import Compilation
+from src.modules.oracle_modes import CompilationMode
 from src.modules.worker import RunOptions, WorkerInputs, WorkerResources, initialize_worker
 
 def fields(compiler: KotlinCompiler) -> tuple[str, bool, str | None]:
@@ -261,13 +282,13 @@ def wiring(options: RunOptions, artifacts: Artifacts) -> None:
     k_attempt: BaseCompiler[KotlinSettings] = kotlin.make_compiler('src')
     j_attempt: BaseCompiler[None] = java.make_compiler('src')
     inputs: WorkerInputs[KotlinSettings] = WorkerInputs(
-        options, {}, 'version', KotlinCompiler, KotlinSettings())
+        options, {}, 'version', KotlinCompiler, KotlinSettings(), CompilationMode())
     resources: WorkerResources[KotlinSettings] = initialize_worker(inputs)
     backend: str = resources.compiler_settings.backend
     Compilation(options, artifacts, {'kotlin': KotlinCompiler}, settings=None)  # mismatch
     Compilation(options, artifacts, {'java': JavaCompiler}, settings=KotlinSettings())  # mismatch
-    WorkerInputs(options, {}, 'version', KotlinCompiler, None)  # mismatch
-    WorkerInputs(options, {}, 'version', JavaCompiler, KotlinSettings())  # mismatch
+    WorkerInputs(options, {}, 'version', KotlinCompiler, None, CompilationMode())  # mismatch
+    WorkerInputs(options, {}, 'version', JavaCompiler, KotlinSettings(), CompilationMode())  # mismatch
 
 attempt(KotlinCompiler, None)  # mismatch
 attempt(JavaCompiler, KotlinSettings())  # mismatch

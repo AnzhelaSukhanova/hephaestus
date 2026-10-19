@@ -38,9 +38,10 @@ def test_probability_configuration_always_has_crossmodule_probability():
 def test_non_kotlin_arguments_disable_crossmodule_by_default():
     script = """
 import json
-from src.args import args
+from src.args import configure_generator, parse_args
 from src.generators.config import cfg
 
+configure_generator(parse_args())
 print(json.dumps(cfg.prob.crossmodule_probability))
 """
     probability = subprocess.run(

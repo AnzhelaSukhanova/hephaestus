@@ -20,7 +20,7 @@ def test_module_local_diagnostics_match_absolute_source_paths(
         pytest.skip(f'Kotlin {backend} compiler is not available')
     settings = KotlinSettings(backend=backend, executable=str(executable))
     if backend != 'native':
-        stdlib = Path(os.path.expandvars(KotlinCompiler('src', settings=settings)._stdlib()))
+        stdlib = Path(os.path.expandvars(KotlinCompiler('src', settings=settings).stdlib_path()))
         if not stdlib.is_file():
             pytest.skip(f'Kotlin {backend} standard library is not available')
 

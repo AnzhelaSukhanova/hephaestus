@@ -1,11 +1,20 @@
 import json
 from copy import deepcopy
 
+import pytest
+
 from src.generators.config import cfg
 from src.ir import ast, kotlin_types as kt
 from src.ir.context import Context
-from src.modules.crossmodule import CrossModuleManager
+from src.modules.crossmodule import CrossModuleManager, ManifestDiff, VariantPublication
+from src.modules.models import OracleResult
+from src.modules.worker_reporting import Reporting
 from src.utils import RandomUtils
+from tests.test_outcome_consumers import reporting_options
+
+
+CROSSMODULE_STATS_FIELDS = {
+    "crossmodule", "crossmodule_manifest_diff", "crossmodule_variant_manifest_diff"}
 
 
 def _function(name, visibility=ast.Visibilities.PUBLIC):
@@ -234,7 +243,8 @@ def test_prepare_dependency_restores_context_and_full_closure(tmp_path):
     assert dependency["pid"] == 17
     assert dependency["context"] is imported_context
     assert dependency["closure"] == [17, 3]
-    assert dependency["klibs"] == [
+    assert "klibs" not in dependency
+    assert _manager(lab).dependency_klibs(dependency["closure"]) == [
         str((lab / "klibs" / "d17.klib").resolve()),
         str((lab / "klibs" / "d3.klib").resolve()),
     ]
@@ -245,6 +255,15 @@ def test_prepare_dependency_skips_failed_program_load(tmp_path):
     lab = tmp_path / "lab"
     _write_ledger(lab, {"17": {"direct": None, "closure": []}})
     _publish_artifacts(lab, [17])
+
+    assert _manager(lab).prepare_dependency(99) is None
+
+
+def test_prepare_dependency_requires_every_klib_in_the_closure(tmp_path):
+    lab = tmp_path / "lab"
+    _write_ledger(lab, {"17": {"direct": 3, "closure": [3]}})
+    _publish_artifacts(lab, [17, 3])
+    (lab / "klibs" / "d3.klib").unlink()
 
     assert _manager(lab).prepare_dependency(99) is None
 
@@ -263,3 +282,123 @@ def test_manifest_diff_reports_only_unexpected_dependencies(tmp_path):
         "closure": ["d17"],
         "unexpected": ["d3", "d9"],
     }
+
+
+def _staged_provider(lab, pid):
+    source_dir = lab / "tmp" / str(pid)
+    source_dir.mkdir(parents=True)
+    (source_dir / "program.kt").write_text("fun main() {}")
+    (source_dir / "program.kt.bin").write_bytes(b"pickle")
+    klib = lab / "batch" / "d{}.klib".format(pid)
+    klib.parent.mkdir(exist_ok=True)
+    klib.write_bytes(b"klib")
+    return str(klib)
+
+
+def test_manifest_disagreement_is_klib_evidence_not_ledger_state(tmp_path, capsys):
+    lab = tmp_path / "lab"
+    _write_ledger(lab, {"3": {"direct": None, "closure": []}})
+    _publish_artifacts(lab, [3])
+    manager = _manager(lab, load_program=lambda _: ast.Program(Context(), "kotlin"))
+    manager.read_manifest_depends = lambda _: {"d3", "ghost"}
+    diff = {"manifest_depends": ["d3", "ghost"], "closure": ["d3"],
+            "unexpected": ["ghost"]}
+
+    record = manager.publish_provider(
+        7, _staged_provider(lab, 7), ["kotlinc", "-Xflag"], 3)
+
+    assert record == {"direct": 3, "closure": [3], "manifest_diff": diff}
+    metadata = json.loads((lab / "klibs" / "d7.meta.json").read_text())
+    assert metadata["manifest_diff"] == diff
+    assert metadata["command"] == ["kotlinc", "-Xflag"]
+    # Publication alone does not advertise the provider.
+    assert manager.load_ledger() == {"3": {"direct": None, "closure": []}}
+    assert _candidates(lab) == [3]
+
+    manager.commit_publications({7: record})
+
+    assert "Program 7 records dependencies outside its closure: ['ghost']" in (
+        capsys.readouterr().out)
+    assert manager.load_ledger() == {
+        "3": {"direct": None, "closure": []},
+        "7": {"direct": 3, "closure": [3]},
+    }
+    assert record["manifest_diff"] == diff
+    assert _candidates(lab) == [3, 7]
+    assert manager.publication_record(7)["closure"] == [7, 3]
+    assert not list(lab.glob("*.tmp"))
+
+
+def test_commit_publications_merges_batches_atomically(tmp_path, monkeypatch):
+    lab = tmp_path / "lab"
+    manager = _manager(lab)
+    lab.mkdir()
+    manager.commit_publications({})
+    assert not (lab / "crossmodule.json").exists()
+
+    _write_ledger(lab, {"3": {"direct": None, "closure": [], "exports": ["a"]}})
+    manager.commit_publications({17: {"direct": 3, "closure": [3]}})
+    manager.commit_publications({
+        18: {"direct": 17, "closure": [17, 3]},
+        19: {"direct": None, "closure": [], "variants": {}},
+    })
+    expected = {
+        "3": {"direct": None, "closure": [], "exports": ["a"]},
+        "17": {"direct": 3, "closure": [3]},
+        "18": {"direct": 17, "closure": [17, 3]},
+        "19": {"direct": None, "closure": [], "variants": {}},
+    }
+    assert manager.load_ledger() == expected
+    assert manager.ledger_closure(manager.load_ledger(), 18) == [17, 3]
+
+    committed = (lab / "crossmodule.json").read_bytes()
+    manager.commit_publications({})
+    assert (lab / "crossmodule.json").read_bytes() == committed
+
+    def interrupted(source, destination):
+        raise OSError("interrupted ledger replacement")
+
+    monkeypatch.setattr("src.modules.crossmodule.os.replace", interrupted)
+    with pytest.raises(OSError, match="interrupted"):
+        manager.commit_publications({20: {"direct": None, "closure": []}})
+    assert (lab / "crossmodule.json").read_bytes() == committed
+
+
+def test_run_statistics_hold_no_crossmodule_bookkeeping(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg.prob, "crossmodule_probability", 1.0)
+    lab = tmp_path / "lab"
+    _write_ledger(lab, {"3": {"direct": None, "closure": []}})
+    manager = _manager(lab)
+    reporting = Reporting(reporting_options(lab), manager)
+    assert not CROSSMODULE_STATS_FIELDS & reporting.stats.keys()
+    diff: ManifestDiff = {
+        "manifest_depends": ["ghost"], "closure": ["d3"], "unexpected": ["ghost"]}
+    variants: dict[str, VariantPublication] = {"js": {
+        "backend": "js", "module_name": "d8",
+        "klib": "klibs/d8-js.klib", "metadata": "klibs/d8-js.meta.json"}}
+
+    reporting.update_stats(OracleResult(publications={
+        7: {"direct": 3, "closure": [3], "manifest_diff": diff}}), 1, 0)
+    reporting.update_stats(OracleResult(publications={
+        8: {"direct": 7, "closure": [7, 3], "variants": variants,
+            "variant_manifest_diff": {"js": diff}}}), 1, 0)
+
+    assert manager.load_ledger() == {
+        "3": {"direct": None, "closure": []},
+        "7": {"direct": 3, "closure": [3]},
+        "8": {"direct": 7, "closure": [7, 3], "variants": variants},
+    }
+    stats = json.loads((lab / "stats.json").read_text())
+    assert stats["totals"]["passed"] == 2
+    assert not CROSSMODULE_STATS_FIELDS & stats.keys()
+    assert not CROSSMODULE_STATS_FIELDS & reporting.stats.keys()
+
+    # Saving statistics, or a batch without publications, leaves the ledger alone.
+    ledger = lab / "crossmodule.json"
+    committed = ledger.read_bytes()
+    reporting.save_stats()
+    reporting.update_stats(OracleResult(), 1, 0)
+    assert ledger.read_bytes() == committed
+    ledger.unlink()
+    reporting.save_stats()
+    assert not ledger.exists()

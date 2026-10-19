@@ -1,36 +1,30 @@
-import subprocess
-import sys
-from pathlib import Path
+from copy import deepcopy
 
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_program_result_keeps_dependency_inputs_out_of_stats():
-    script = """
-import sys
-from typing import List, Optional
-
-sys.argv = ["hephaestus.py", "--language", "kotlin"]
-
-import hephaestus
+from src.generators.config import cfg
 from src.modules.crossmodule import CrossModuleManager
+from src.modules.models import ProgramRes
+from src.utils import RandomUtils
 
-result = hephaestus.ProgramRes(
-    False, {}, direct_dependency_pid=7,
-    dep_transitive_closure_klibs=["/published/d7.klib"])
-assert result.direct_dependency_pid == 7
-assert result.dep_transitive_closure_klibs == ["/published/d7.klib"]
-assert CrossModuleManager.dependency_klibs(result.dep_transitive_closure_klibs) == [
-    "/published/d7.klib"]
-assert CrossModuleManager.dependency_klibs(None) == []
-assert "dependency" not in result.stats
-assert hephaestus.ProgramRes.__annotations__["direct_dependency_pid"] == Optional[int]
-assert (hephaestus.ProgramRes.__annotations__["dep_transitive_closure_klibs"]
-        == Optional[List[str]])
-"""
-    subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        check=True,
-    )
+
+class _Random(RandomUtils):
+    def __init__(self):
+        pass
+
+
+def test_program_result_keeps_logical_dependency_ids_out_of_stats(tmp_path):
+    config = deepcopy(cfg)
+    manager = CrossModuleManager(
+        str(tmp_path), config, 'native', 'test', lambda _: None, _Random(),
+        lambda _: None)
+    result = ProgramRes(
+        False, {}, direct_dependency_pid=7,
+        dep_transitive_closure_pids=(7, 3))
+
+    assert result.direct_dependency_pid == 7
+    assert result.dep_transitive_closure_pids == (7, 3)
+    assert manager.dependency_klibs(result.dep_transitive_closure_pids) == [
+        str((tmp_path / 'klibs' / 'd7.klib').resolve()),
+        str((tmp_path / 'klibs' / 'd3.klib').resolve()),
+    ]
+    assert 'dependency' not in result.stats
+    assert ProgramRes.__annotations__['dep_transitive_closure_pids'] == tuple[int, ...]

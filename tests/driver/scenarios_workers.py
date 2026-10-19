@@ -110,5 +110,5 @@ def coverage_worker() -> None:
     contracts.program_result(result)
     assert result.failed is False
     assert result.direct_dependency_pid is None
-    assert result.dep_transitive_closure_klibs is None
+    assert result.dep_transitive_closure_pids == ()
     assert Path(driver.cli_args.test_directory, 'tmp/4321/escalations.json').read_text() == '[]'

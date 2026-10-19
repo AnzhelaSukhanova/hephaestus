@@ -464,7 +464,7 @@ def _failed(processor_type: type[_GenerationFailure | _CPFailure | _NCPFailure],
     contracts.program_result(result)
     assert result.failed is True
     assert result.direct_dependency_pid is None
-    assert result.dep_transitive_closure_klibs is None
+    assert result.dep_transitive_closure_pids == ()
     error = str(processor.failure)
     if args.print_stacktrace:
         error = ''.join(traceback.format_exception(processor.failure))

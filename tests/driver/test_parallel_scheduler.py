@@ -14,7 +14,7 @@ import pytest
 import hephaestus
 from src.generators.config import cfg
 from src.modules import scheduler
-from src.modules.models import ProgramRes
+from src.modules.models import OracleResult, ProgramRes
 
 
 @dataclass
@@ -63,7 +63,7 @@ class ControlledPool:
 
     def compiled(self, *pids: int):
         task = self.take('compile', *pids)
-        task.callback(({}, 1.0, {}, {}))
+        task.callback(OracleResult(compilation_time=1.0))
 
     def close(self):
         self.lifecycle.append('close')
@@ -205,7 +205,9 @@ def test_dry_run_and_generation_failures_preserve_counts_and_cleanup(
     assert all(stage == 'generate' for stage, _ in pool.history)
     updates = runner.reporting.update_stats.call_args_list
     assert [call.args[1] for call in updates] == [2, 2, 1]
-    assert all(call.args[0] == ({}, 0, {}, {}) for call in updates)
+    assert updates[0].args[0].faults == {}
+    assert set(updates[0].args[0].inconclusive) == {2}
+    assert all(call.args[0] == OracleResult() for call in updates[1:])
     if disabled_metrics:
         assert all(call.args[3] == {} for call in updates)
 
@@ -340,7 +342,8 @@ def _probe_compilation(directory: str, oracles):
     pid, = oracles
     root = Path(os.environ['SCHEDULER_PROBE_DIRECTORY'])
     (root / f'compiled-{pid}').write_text(str(os.getpid()))
-    return {}, 0.1, {}, {pid: {'direct': None, 'closure': []}}
+    return OracleResult(compilation_time=0.1,
+                        publications={pid: {'direct': None, 'closure': []}})
 
 
 @pytest.mark.parametrize('method', ['spawn', 'fork'])
@@ -360,8 +363,13 @@ def test_real_pool_overlaps_generation_and_publishes_only_in_parent(
     fuzzer.setup_crossmodule_manager('probe compiler')
     parent_pid = os.getpid()
     original_update = fuzzer.reporting.update_stats
-    original_save = fuzzer.reporting.manager.save_ledger
+    original_save = fuzzer.manager.save_ledger
+    root = tmp_path / 'bugs/session'
+    root.mkdir(parents=True)
+    # Entries committed before this run are preserved by every later commit.
+    (root / 'crossmodule.json').write_text(json.dumps({'7': {'direct': None, 'closure': []}}))
     updates = []
+    commits = []
 
     def update(*args):
         assert os.getpid() == parent_pid
@@ -370,16 +378,26 @@ def test_real_pool_overlaps_generation_and_publishes_only_in_parent(
 
     def save(ledger):
         assert os.getpid() == parent_pid
+        commits.append(dict(ledger))
         original_save(ledger)
 
     monkeypatch.setattr(fuzzer.reporting, 'update_stats', update)
-    monkeypatch.setattr(fuzzer.reporting.manager, 'save_ledger', save)
+    monkeypatch.setattr(fuzzer.manager, 'save_ledger', save)
     fuzzer.scheduler.run_parallel('probe compiler')
     workers = {int((tmp_path / f'generated-{pid}').read_text()) for pid in (1, 2)}
     assert len(workers) == 2
     assert parent_pid not in workers
     assert len(updates) == 2
-    assert fuzzer.reporting.stats['totals'] == {'passed': 2, 'failed': 0}
-    ledger = json.loads((tmp_path / 'bugs/session/crossmodule.json').read_text())
+    assert fuzzer.reporting.stats['totals'] == {
+        'passed': 2, 'failed': 0, 'inconclusive': 0}
+    ledger = json.loads((root / 'crossmodule.json').read_text())
     assert ledger == {'1': {'direct': None, 'closure': []},
-                      '2': {'direct': None, 'closure': []}}
+                      '2': {'direct': None, 'closure': []},
+                      '7': {'direct': None, 'closure': []}}
+    # One commit per publication batch, each keeping the earlier providers.
+    assert [len(ledger) for ledger in commits] == [2, 3]
+    assert all(commits[1][pid] == record for pid, record in commits[0].items())
+    stats = json.loads((root / 'stats.json').read_text())
+    for name in ('crossmodule', 'crossmodule_manifest_diff',
+                 'crossmodule_variant_manifest_diff'):
+        assert name not in stats and name not in fuzzer.reporting.stats

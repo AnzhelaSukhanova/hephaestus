@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 import zipfile
 
 import pytest
@@ -18,6 +18,18 @@ from src.modules import generation, scheduler
 from src.modules.worker_reporting import Reporting
 from tests.driver.fixtures import replay
 from tests.driver.support import ROOT
+
+
+def discovered_commands(compilation) -> list[list[str]]:
+    commands: list[list[str]] = []
+
+    def probe(arguments, get_stdout=True, cwd=None):
+        commands.append(arguments)
+        return True, 'version'
+
+    with patch.object(compilation, 'run_command', probe):
+        compilation.discover_versions()
+    return commands
 
 
 def test_main_configures_before_constructing_and_starting() -> None:
@@ -98,10 +110,11 @@ def test_manager_is_cached_per_process_and_shared_with_owners() -> None:
         assert application.setup_crossmodule_manager('version') is first
         assert application.setup_crossmodule_manager('version') is first
         assert application.setup_crossmodule_manager('version') is second
-    assert create.call_args_list == [
-        call(application.options, 'version', application.scheduler.compiler_cls),
-        call(application.options, 'version', application.scheduler.compiler_cls),
-    ]
+    # Ordinary compilation publishes no variant bundles, so the manager gets no variants.
+    expected = call(application.options, 'version', application.scheduler.compiler_cls,
+                    settings_by_variant=None,
+                    versions_by_variant=application.compilation.versions_by_variant)
+    assert create.call_args_list == [expected, expected]
     assert application.manager_pid == 456
     for component in (application.generation, application.evaluation,
                       application.reporting):
@@ -140,8 +153,8 @@ def test_fuzzer_ignores_non_cli_executable_attribute() -> None:
     options.compiler_executable = '/test-only/kotlinc'
     fuzzer = hephaestus.Fuzzer(options)
     assert fuzzer.compilation.settings == KotlinSettings('wasm', True)
-    assert fuzzer.compilation.version_command() == KotlinCompiler.get_compiler_version(
-        fuzzer.compilation.settings)
+    assert discovered_commands(fuzzer.compilation) == [
+        KotlinCompiler.get_compiler_version(fuzzer.compilation.settings, ANY)]
 
 
 def test_injected_kotlin_subclass_controls_settings_selection() -> None:
@@ -157,8 +170,8 @@ def test_injected_kotlin_subclass_controls_settings_selection() -> None:
     compiler = fuzzer.compilation.make_compiler('src')
     assert type(compiler) is InjectedKotlin
     assert compiler.settings is fuzzer.compilation.settings
-    assert fuzzer.compilation.version_command() == InjectedKotlin.get_compiler_version(
-        fuzzer.compilation.settings)
+    assert discovered_commands(fuzzer.compilation) == [
+        InjectedKotlin.get_compiler_version(fuzzer.compilation.settings, ANY)]
     assert fuzzer.scheduler.worker_inputs('version').compiler_cls is InjectedKotlin
 
 
@@ -176,7 +189,7 @@ def test_non_kotlin_adapter_under_kotlin_key_receives_none(compiler_cls) -> None
     compiler = fuzzer.compilation.make_compiler('src')
     assert type(compiler) is compiler_cls
     assert compiler.settings is None
-    assert fuzzer.compilation.version_command() == compiler_cls.get_compiler_version()
+    assert discovered_commands(fuzzer.compilation) == [compiler_cls.get_compiler_version()]
 
 
 @pytest.mark.parametrize('language', ['kotlin', 'java', 'groovy', 'scala'])
@@ -278,7 +291,8 @@ def test_scheduling_logs_and_aggregates_with_parent_reporting(
     assert events == [(loop_name, parent_pid), ('logging', parent_pid),
                       ('update_stats', parent_pid), ('update_stats', parent_pid),
                       ('_finish', parent_pid)]
-    assert reporter.stats['totals'] == {'passed': 2, 'failed': 0}
+    assert reporter.stats['totals'] == {
+        'passed': 2, 'failed': 0, 'inconclusive': 0}
     assert 'Total faults: 0' in capsys.readouterr().out
 
 
@@ -330,7 +344,7 @@ def test_script_runs_replay_with_real_workers(tmp_path: Path, workers: int | Non
     assert result.returncode == 0, result.stdout + result.stderr
     run = tmp_path / 'bugs/session'
     stats = json.loads((run / 'stats.json').read_text())
-    assert stats['totals'] == {'passed': 2, 'failed': 0}
+    assert stats['totals'] == {'passed': 2, 'failed': 0, 'inconclusive': 0}
     assert stats['Info']['compiler'] == 'hermetic compiler 1.0'
     assert json.loads((run / 'faults.json').read_text()) == {}
     assert not (run / 'tmp').exists()

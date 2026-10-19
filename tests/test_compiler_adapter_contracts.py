@@ -105,7 +105,7 @@ def test_kotlin_phase_enrichment_and_commands(monkeypatch):
                          "-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath",
                          "-ir-output-dir", "src",
                          "-ir-output-name", "src", "-libraries",
-                         compiler._stdlib(), "-nowarn",
+                          compiler.stdlib_path(), "-nowarn",
                          "-Xklib-ir-inliner=full"])
     dump_flags = (["-Xphases-to-dump=" + compiler.IR_MODIFYING_INLINER_PHASES,
                    "-Xdump-directory=src/ir"] if cli_args.dump_ir else [])

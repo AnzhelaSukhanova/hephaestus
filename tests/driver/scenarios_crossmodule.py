@@ -8,12 +8,12 @@ import pickle
 from typing import assert_type
 from unittest.mock import patch
 
-from hephaestus import OracleResult, ProgramRes
 from src import utils
 from src.compilers.kotlin import KotlinCompiler
 from src.ir import ast
 from src.ir.context import Context
-from src.modules.crossmodule import CrossModuleManager, LedgerRecord
+from src.modules.crossmodule import CrossModuleManager, ManifestDiff, PublicationRecord
+from src.modules.models import OracleResult, ProgramRes
 from tests.driver import contracts
 from tests.driver.crossmodule_fixtures import (
     Commands, CompileStep, FaultProcessor, KlibLayout, RecordingProcessor,
@@ -99,8 +99,13 @@ def _check(node: Node) -> OracleResult:
     return result
 
 
+CROSSMODULE_STATS_FIELDS = (
+    'crossmodule', 'crossmodule_manifest_diff', 'crossmodule_variant_manifest_diff')
+
+
 def _persist(manager: CrossModuleManager, node: Node, result: OracleResult,
-             direct: int | None, closure: list[int], command: list[str]) -> None:
+             direct: int | None, closure: list[int], command: list[str],
+             diff: ManifestDiff | None = None) -> None:
     assert result[0] == {}
     assert set(result[3]) == {node.pid}
     record = result[3][node.pid]
@@ -117,14 +122,15 @@ def _persist(manager: CrossModuleManager, node: Node, result: OracleResult,
         'pid': node.pid, 'command': command,
         'compiler_version': 'hermetic compiler 1.0', 'backend': driver.cli_args.backend,
         'flags': [argument for argument in command if argument.startswith('-X')],
+        **({'manifest_diff': diff} if diff is not None else {}),
     }
     driver.update_stats(result, 1, node.result.stats['time'])
     expected = {**before, str(node.pid): {'direct': direct, 'closure': closure}}
     assert manager.load_ledger() == expected
     assert node.pid in manager.provider_candidates(999)
     stats = json.loads((root / 'stats.json').read_text())
-    assert stats['crossmodule'] == expected
-    assert driver.STATS['crossmodule'] == expected
+    for name in CROSSMODULE_STATS_FIELDS:
+        assert name not in stats and name not in driver.STATS
     ledger_bytes = Path(manager.ledger_path()).read_bytes()
     driver.save_stats()
     assert Path(manager.ledger_path()).read_bytes() == ledger_bytes
@@ -151,7 +157,7 @@ def _external_publication(manager: CrossModuleManager, pid: int,
                           closure: list[int]) -> Node:
     node = _generate(manager, pid)
     assert node.result.direct_dependency_pid == (closure[0] if closure else None)
-    assert node.result.dep_transitive_closure_klibs == (_dependencies(manager, closure) or None)
+    assert node.result.dep_transitive_closure_pids == tuple(closure)
     result = _check(node)
     assert pid in result[3], 'Successful provider must be published'
     assert result[3][pid] == {'direct': closure[0] if closure else None, 'closure': closure}
@@ -327,7 +333,7 @@ def _drop(rejected: bool) -> None:
     _external_publication(manager, 1, [])
     _external_publication(manager, 2, [1])
     node = _generate(manager, 3, relative=True)
-    assert node.result.dep_transitive_closure_klibs == _dependencies(manager, [2, 1])
+    assert node.result.dep_transitive_closure_pids == (2, 1)
     before = Path(manager.ledger_path()).read_bytes()
     manager.config.prob.drop_indirect_deps_prob = 1.0
     steps = [CompileStep(node.directory / 'src', status=not rejected,
@@ -336,7 +342,7 @@ def _drop(rejected: bool) -> None:
         steps.append(CompileStep(node.source, manifest='depends=stdlib d2\n'))
     result, commands = _custom(manager, node, steps, _dependencies(manager, [2]))
     assert node.result.stats['dropped_indirect_deps'] == [1]
-    assert node.result.dep_transitive_closure_klibs == _dependencies(manager, [2, 1])
+    assert node.result.dep_transitive_closure_pids == (2, 1)
     assert Path(manager.ledger_path()).read_bytes() == before
     assert Path(manager.published_klib_path(1)).exists()
     if rejected:
@@ -373,15 +379,12 @@ def _manifest(layout: KlibLayout, dropped: bool = False) -> None:
         CompileStep(node.directory / 'src', layout),
         CompileStep(node.source, layout, 'unique_name=d3\ndepends=stdlib d2 d1 ghost\n'),
     ], _dependencies(manager, expected))
-    diff = {'manifest_depends': ['d1', 'd2', 'ghost'],
-            'closure': sorted(f'd{pid}' for pid in expected),
-            'unexpected': ['d1', 'ghost'] if dropped else ['ghost']}
+    diff: ManifestDiff = {'manifest_depends': ['d1', 'd2', 'ghost'],
+                          'closure': sorted(f'd{pid}' for pid in expected),
+                          'unexpected': ['d1', 'ghost'] if dropped else ['ghost']}
     assert result[3][3].get('manifest_diff') == diff
     assert klib_payload(Path(manager.published_klib_path(3))) == 'isolated'
-    _persist(manager, node, result, 2, [2, 1], commands.calls[-1])
-    stats = json.loads((Path(manager.test_directory) / 'stats.json').read_text())
-    assert stats['crossmodule_manifest_diff'] == {'3': diff}
-    assert driver.STATS['crossmodule_manifest_diff'] == {'3': diff}
+    _persist(manager, node, result, 2, [2, 1], commands.calls[-1], diff)
     assert 'manifest_diff' not in contracts.record(manager.load_ledger()['3'])
 
 
@@ -447,7 +450,7 @@ def missing_klib() -> None:
 def stale_candidates() -> None:
     manager = _setup()
     root = Path(manager.test_directory)
-    ledger: dict[str, LedgerRecord] = {}
+    ledger: dict[str, PublicationRecord] = {}
     for pid in range(1, 8):
         directory = root / str(pid)
         directory.mkdir(parents=True)
@@ -470,13 +473,13 @@ def stale_candidates() -> None:
     assert dependency is not None and dependency['pid'] == 1
     contracts.dependency(dependency)
     assert dependency['closure'] == [1]
-    assert dependency['klibs'] == _dependencies(manager, [1])
+    assert 'klibs' not in dependency
     assert dependency['context'].get_decl(ast.GLOBAL_NAMESPACE, 'answer') is not None
     assert Path(manager.ledger_path()).read_bytes() == original
     Path(manager.published_klib_path(1)).unlink()
     node = _generate(manager, 8)
     assert node.result.direct_dependency_pid is None
-    assert node.result.dep_transitive_closure_klibs is None
+    assert node.result.dep_transitive_closure_pids == ()
     assert node.processor.imported is None
     assert Path(manager.ledger_path()).read_bytes() == original
 
@@ -543,7 +546,7 @@ def disabled() -> None:
                      cwd: str | None = None) -> tuple[bool, str]:
         assert get_stdout and cwd is None
         compiler = KotlinCompiler(str(node.directory / 'src'))
-        assert compiler.get_klib_filename() is None
+        assert compiler.get_dependency_artifact_filename() is None
         assert arguments == compiler.get_compiler_cmd()
         assert '-friend-modules' not in arguments and '-Xfriend-modules' not in arguments
         assert '-Xir-produce-klib-file' not in arguments

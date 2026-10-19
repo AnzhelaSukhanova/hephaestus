@@ -2,7 +2,7 @@ import json
 import subprocess
 import tomllib
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import pytest
 
@@ -251,7 +251,9 @@ def test_startup_order_version_stripping_and_dispatch(
     ])
     application = hephaestus.Fuzzer(options)
     events = Mock()
-    command = application.compilation.version_command()
+    # One probe in a scratch directory, which only Kotlin JS/Wasm put to use.
+    compiler_cls = application.compilation.compiler_types[application.options.language]
+    command = compiler_cls.get_compiler_version(application.compilation.settings, ANY)
     with (
         patch.object(hephaestus, 'validate_args') as validation,
         patch.object(hephaestus, 'pre_process_args') as preprocessing,

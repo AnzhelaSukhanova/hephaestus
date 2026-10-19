@@ -65,8 +65,8 @@ def program_result(value: object) -> None:
             assert isinstance(name, str)
             assert type(expected) is bool
     assert dependency is None or type(dependency) is int
-    assert closure is None or (is_sequence(closure) and
-                               all(isinstance(path, str) for path in closure))
+    assert is_sequence(closure)
+    assert all(type(pid) is int for pid in closure)
 
 
 def oracle_result(value: object) -> None:
@@ -101,10 +101,8 @@ def ledger_record(value: object) -> None:
 
 def dependency(value: object) -> None:
     fields = record(value)
-    assert {'pid', 'context', 'closure', 'klibs'} <= fields.keys()
+    assert {'pid', 'context', 'closure'} <= fields.keys()
     assert type(fields['pid']) is int
     assert isinstance(fields['context'], Context)
     assert is_sequence(fields['closure'])
     assert all(type(pid) is int for pid in fields['closure'])
-    assert is_sequence(fields['klibs'])
-    assert all(type(path) is str for path in fields['klibs'])

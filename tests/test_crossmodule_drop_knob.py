@@ -6,7 +6,7 @@ from src.modules.crossmodule import CrossModuleManager
 from src.utils import RandomUtils
 
 
-KLIBS = ["/lab/klibs/d17.klib", "/lab/klibs/d3.klib", "/lab/klibs/d1.klib"]
+CLOSURE = (17, 3, 1)
 
 
 class _Random(RandomUtils):
@@ -36,24 +36,24 @@ def _manager(test_directory, probability):
 
 
 def test_every_indirect_dependency_is_dropped_at_probability_one(tmp_path):
-    kept, dropped = _manager(tmp_path, 1.0).apply_drop_knob(KLIBS)
+    kept, dropped = _manager(tmp_path, 1.0).apply_drop_knob(CLOSURE)
 
     # The direct dependency is never dropped.
-    assert kept == [KLIBS[0]]
+    assert kept == [17]
     assert dropped == [3, 1]
 
 
 def test_nothing_is_dropped_by_default(tmp_path):
-    kept, dropped = _manager(tmp_path, 0.0).apply_drop_knob(KLIBS)
+    kept, dropped = _manager(tmp_path, 0.0).apply_drop_knob(CLOSURE)
 
-    assert kept == KLIBS
+    assert kept == list(CLOSURE)
     assert dropped == []
 
 
 def test_a_chain_root_dependency_is_never_dropped(tmp_path):
-    kept, dropped = _manager(tmp_path, 1.0).apply_drop_knob([KLIBS[0]])
+    kept, dropped = _manager(tmp_path, 1.0).apply_drop_knob(CLOSURE[:1])
 
-    assert kept == [KLIBS[0]]
+    assert kept == [17]
     assert dropped == []
 
 
@@ -64,8 +64,7 @@ def test_dropping_leaves_the_ledger_closure_untouched(tmp_path):
     }))
     manager = _manager(tmp_path, 1.0)
 
-    _, dropped = manager.apply_drop_knob(
-        ['/lab/klibs/d17.klib', '/lab/klibs/d3.klib'])
+    _, dropped = manager.apply_drop_knob((17, 3))
     record = manager.publication_record(17)
 
     assert dropped == [3]

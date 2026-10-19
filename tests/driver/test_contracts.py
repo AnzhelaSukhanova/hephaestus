@@ -37,7 +37,7 @@ def test_invalid_json(value: object) -> None:
 
 def test_valid_payloads() -> None:
     contracts.program_result((False, {'programs': {'p.kt': True}, 'time': 0,
-                                     'error': None, 'transformations': []}, None, None))
+                                     'error': None, 'transformations': []}, None, ()))
     contracts.oracle_result(({1: {'error': 'rejected'}}, 0.5,
                              {1: {'compile': 0}}, {}))
     contracts.json_value({'1': [None, True, 'text', 0.5]})
@@ -51,8 +51,8 @@ def test_invalid_publication(value: object) -> None:
         contracts.oracle_result(({}, 0, {}, {1: value}))
 
 
-@pytest.mark.parametrize('value', [{}, {'pid': True, 'context': None, 'closure': [], 'klibs': []},
-                                  {'pid': 1, 'context': 'not a Context', 'closure': [], 'klibs': []}])
+@pytest.mark.parametrize('value', [{}, {'pid': True, 'context': None, 'closure': []},
+                                  {'pid': 1, 'context': 'not a Context', 'closure': []}])
 def test_invalid_dependency(value: object) -> None:
     with pytest.raises(AssertionError):
         contracts.dependency(value)

@@ -17,13 +17,22 @@ def main() -> None:
     # Imports below must remain after argument setup, including with spawn.
     import hephaestus
     import src.compilers.kotlin as kotlin
-    import shlex
     from tests.driver.support import ROOT
-    kotlin.compiler = (shlex.quote(sys.executable) + ' ' +
-                       shlex.quote(str(ROOT / 'tests/driver/fake_compiler.py')))
+    options = hephaestus.parse_args(sys.argv[1:])
+    assert options.test_directory == str(workspace / 'bugs/session')
     tools = workspace / 'tools'
     tools.mkdir(exist_ok=True)
-    for name in ('javac', 'groovyc', 'scalac'):
+    kotlinc = tools / 'kotlinc'
+    resolve_executable = kotlin._compiler_executable
+
+    def hermetic_executable(settings: kotlin.KotlinSettings) -> str:
+        # Only default distribution paths are substituted; configured paths still win.
+        executable = resolve_executable(settings)
+        return str(kotlinc) if executable.startswith('$HOME/kotlin/') else executable
+
+    # Serial and forked runs inherit this; spawned workers re-import the adapter.
+    kotlin._compiler_executable = hermetic_executable
+    for name in ('kotlinc', 'javac', 'groovyc', 'scalac'):
         executable = tools / name
         executable.write_text('#!' + sys.executable + '\n' +
                               (ROOT / 'tests/driver/fake_compiler.py').read_text())
@@ -33,7 +42,6 @@ def main() -> None:
     module_name, function_name = scenario.rsplit('.', 1)
     function = getattr(importlib.import_module(module_name), function_name)
     function()
-    assert hephaestus.cli_args.test_directory == str(workspace / 'bugs/session')
 
 
 if __name__ == '__main__':

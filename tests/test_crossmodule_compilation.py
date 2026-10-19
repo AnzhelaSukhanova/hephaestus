@@ -149,7 +149,7 @@ class Compiler:
     def get_compiler_cmd(self):
         return ["fake-compiler", self.input_name]
 
-    def get_klib_filename(self):
+    def get_dependency_artifact_filename(self):
         return self.module_name + ".klib"
 
     @staticmethod

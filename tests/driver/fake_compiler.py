@@ -17,7 +17,11 @@ def main() -> int:
         print('hermetic compiler 1.0')
         return 0
     mode = os.environ.get('DRIVER_COMPILER_MODE', 'success')
-    if mode == 'crash':
+    target = ('native' if '-produce' in arguments
+              else 'wasm' if any('kotlin-stdlib-wasm-' in argument
+                                 for argument in arguments) else 'js')
+    crash_targets = os.environ.get('DRIVER_CRASH_TARGETS')
+    if mode == 'crash' and (crash_targets is None or target in crash_targets.split(',')):
         print('org.jetbrains.kotlin.CompilerException\ncontrolled crash')
         return 2
     sources: list[Path] = []
@@ -42,7 +46,8 @@ def main() -> int:
     if '-o' in arguments:
         name = arguments[arguments.index('-o') + 1]
     if '-ir-output-name' in arguments:
-        name = arguments[arguments.index('-ir-output-name') + 1]
+        output_directory = arguments[arguments.index('-ir-output-dir') + 1]
+        name = str(Path(output_directory) / arguments[arguments.index('-ir-output-name') + 1])
     if name:
         destination = Path(name + '.klib')
         destination.parent.mkdir(parents=True, exist_ok=True)
