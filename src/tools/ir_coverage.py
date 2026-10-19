@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 from src.tools.ir_csv import DEFAULT_OUTPUT, PHASES, phase_column
+from src.tools.outcomes import read_run_outcomes
 
 
 BACKENDS = {"native", "js", "wasm"}
@@ -153,6 +154,28 @@ def select_rows(fieldnames, rows, columns):
         row for row in rows
         if any(row.get(column) == "1" for column in columns)
     ]
+
+
+def coverage_rows(run_dir, csv_file, columns):
+    fieldnames, phase_rows = read_phase_csv(csv_file)
+    outcomes = read_run_outcomes(run_dir)
+    eligible_rows = []
+    for row in phase_rows:
+        pid = int(row["program_id"])
+        outcome = outcomes.outcome(pid)
+        if outcome == "fault":
+            fault = outcomes.faults[pid]
+            error_phase = fault.get("error_phase", "")
+            if error_phase not in {"backend", "cb"}:
+                continue
+            row["program_kind"] = "backend_fault"
+            row["error_phase"] = error_phase
+        elif outcome == "inconclusive":
+            row["program_kind"] = "inconclusive"
+            row["error_phase"] = ""
+        eligible_rows.append(row)
+
+    return select_rows(fieldnames, eligible_rows, columns)
 
 
 def selected_program_path(run_dir, row):
@@ -414,8 +437,7 @@ def write_jacoco_report(output_dir, classes_dir, backend):
 
 
 def run_coverage(run_dir, columns, backend, csv_file, output_dir, timeout):
-    fieldnames, phase_rows = read_phase_csv(csv_file)
-    rows = select_rows(fieldnames, phase_rows, columns)
+    rows = coverage_rows(run_dir, csv_file, columns)
     validate_selected_programs(run_dir, rows)
     prepare_output_dir(output_dir)
 

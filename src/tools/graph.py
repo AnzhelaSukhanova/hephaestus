@@ -6,6 +6,8 @@ import math
 import os
 import time
 
+from src.tools.outcomes import attempted_iterations, read_run_outcomes
+
 
 FRONTEND_PHASES = {"fir", "frontend"}
 BACKEND_PHASES = {"cb", "backend"}
@@ -35,23 +37,34 @@ def read_json_retry(path, attempts=20, delay=0.05):
     raise last_exc
 
 
-def n_common_points(stats, faults):
-    processed = (
-            stats["totals"].get("passed", 0) +
-            stats["totals"].get("failed", 0)
+def n_common_points(stats, outcomes):
+    totals = stats["totals"]
+    processed = max(
+        attempted_iterations(totals),
+        max(outcomes.faults, default=0),
+        max(outcomes.inconclusive, default=0),
     )
 
-    fir_ids = error_phase_ids(faults, FRONTEND_PHASES)
+    fir_ids = error_phase_ids(outcomes.faults, FRONTEND_PHASES)
+    inconclusive_ids = sorted(
+        pid for pid in outcomes.inconclusive
+        if outcomes.outcome(pid) == "inconclusive")
 
     points = []
     fir_seen = 0
-    idx = 0
+    inconclusive_seen = 0
+    fir_idx = 0
+    inconclusive_idx = 0
 
     for n in range(processed + 1):
-        while idx < len(fir_ids) and fir_ids[idx] <= n:
+        while fir_idx < len(fir_ids) and fir_ids[fir_idx] <= n:
             fir_seen += 1
-            idx += 1
-        points.append((n, n - fir_seen))
+            fir_idx += 1
+        while (inconclusive_idx < len(inconclusive_ids) and
+               inconclusive_ids[inconclusive_idx] <= n):
+            inconclusive_seen += 1
+            inconclusive_idx += 1
+        points.append((n, n - fir_seen - inconclusive_seen))
 
     return points
 
@@ -65,10 +78,11 @@ def error_phase_ids(faults, phases):
 
 
 def points_by_id(points, ids):
+    points_by_x = {x: (x, y) for x, y in points}
     return [
-        points[pid]
+        points_by_x[pid]
         for pid in ids
-        if 0 <= pid < len(points)
+        if pid in points_by_x
     ]
 
 
@@ -204,7 +218,7 @@ def series_colors(count):
 
 
 def write_svg(points, out_file, frontend_ids=None, backend_ids=None,
-              width=1200, height=700):
+              inconclusive_ids=None, width=1200, height=700):
     margin = 70
     max_x = max(x for x, _ in points) or 1
     max_y = max(y for _, y in points) or 1
@@ -220,6 +234,7 @@ def write_svg(points, out_file, frontend_ids=None, backend_ids=None,
     polyline = " ".join(f"{sx(x):.2f},{sy(y):.2f}" for x, y in points)
     frontend_points = points_by_id(points, frontend_ids or [])
     backend_points = points_by_id(points, backend_ids or [])
+    inconclusive_points = points_by_id(points, inconclusive_ids or [])
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
@@ -258,6 +273,11 @@ def write_svg(points, out_file, frontend_ids=None, backend_ids=None,
     for x, y in frontend_points:
         parts.append(
             f'<circle cx="{sx(x):.2f}" cy="{sy(y):.2f}" r="3" fill="#d62728"/>'
+        )
+
+    for x, y in inconclusive_points:
+        parts.append(
+            f'<circle cx="{sx(x):.2f}" cy="{sy(y):.2f}" r="3" fill="#7f7f7f"/>'
         )
 
     parts.extend([
@@ -407,13 +427,16 @@ def write_time_overlay_svg(series, out_file, width=1200, height=700):
 
 def graph_n_common(run_dir):
     stats = read_json_retry(os.path.join(run_dir, "stats.json"))
-    faults = read_json_retry(os.path.join(run_dir, "faults.json"))
+    outcomes = read_run_outcomes(run_dir)
 
-    points = n_common_points(stats, faults)
-    frontend_ids = error_phase_ids(faults, FRONTEND_PHASES)
-    backend_ids = error_phase_ids(faults, BACKEND_PHASES)
+    points = n_common_points(stats, outcomes)
+    frontend_ids = error_phase_ids(outcomes.faults, FRONTEND_PHASES)
+    backend_ids = error_phase_ids(outcomes.faults, BACKEND_PHASES)
+    inconclusive_ids = sorted(
+        pid for pid in outcomes.inconclusive
+        if outcomes.outcome(pid) == "inconclusive")
     out_file = os.path.join(run_dir, "graph_n_common.svg")
-    write_svg(points, out_file, frontend_ids, backend_ids)
+    write_svg(points, out_file, frontend_ids, backend_ids, inconclusive_ids)
     return out_file
 
 

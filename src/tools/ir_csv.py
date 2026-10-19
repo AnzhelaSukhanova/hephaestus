@@ -1,8 +1,9 @@
 import argparse
 import csv
-import json
 import os
-import time
+import sys
+
+from src.tools.outcomes import read_report, read_run_outcomes
 
 
 BACKEND_PHASES = {"backend", "cb"}
@@ -19,21 +20,6 @@ DEFAULT_OUTPUT = "ir_phase_changes.csv"
 IR_CHANGES_FILENAME = "ir_changes.json"
 
 
-def read_json_retry(path, attempts=20, delay=0.05):
-    if not os.path.exists(path):
-        return {}
-
-    last_exc = None
-    for _ in range(attempts):
-        try:
-            with open(path) as f:
-                return json.load(f)
-        except json.JSONDecodeError as exc:
-            last_exc = exc
-            time.sleep(delay)
-    raise last_exc
-
-
 def saved_program_ids(run_dir):
     ids = []
     for name in os.listdir(run_dir):
@@ -43,10 +29,13 @@ def saved_program_ids(run_dir):
     return sorted(ids)
 
 
-def program_kind(pid, faults):
-    fault = faults.get(str(pid))
-    if fault is None:
+def program_kind(pid, outcomes):
+    outcome = outcomes.outcome(pid)
+    if outcome == "inconclusive":
+        return "inconclusive"
+    if outcome != "fault":
         return "successful"
+    fault = outcomes.fault(pid)
     if fault.get("error_phase") in BACKEND_PHASES:
         return "backend_fault"
     return None
@@ -64,7 +53,7 @@ def read_ir_changes(program_dir):
             "Run Hephaestus with --dump-ir for new runs or migrate old raw "
             "dumps with: python -m src.tools.changes_from_ir_dumps <run_dir>"
             .format(changes_file))
-    changes = read_json_retry(changes_file)
+    changes = read_report(changes_file)
     if not isinstance(changes, dict):
         raise SystemExit(
             "Invalid IR change summary, expected JSON object: {}".format(
@@ -88,19 +77,27 @@ def csv_phase_value(changes_file, changes, column):
             column, changes_file, value))
 
 
-def iter_rows(run_dir, faults):
+def iter_rows(run_dir, outcomes):
     for pid in saved_program_ids(run_dir):
-        kind = program_kind(pid, faults)
+        kind = program_kind(pid, outcomes)
         if kind is None:
             continue
 
-        fault = faults.get(str(pid), {})
+        fault = outcomes.fault(pid) or {}
         program_dir = os.path.join(run_dir, str(pid))
+        changes_path = os.path.join(program_dir, IR_CHANGES_FILENAME)
+        if kind == "inconclusive" and not os.path.exists(changes_path):
+            print(
+                "Skipping inconclusive program {}: missing IR change summary {}"
+                .format(pid, changes_path),
+                file=sys.stderr,
+            )
+            continue
         changes_file, changes = read_ir_changes(program_dir)
         row = {
             "program_id": pid,
             "program_kind": kind,
-            "error_phase": fault.get("error_phase", ""),
+            "error_phase": fault.get("error_phase", "") if fault else "",
         }
         for phase_no, phase_name in PHASES:
             column = phase_column(phase_no, phase_name)
@@ -109,7 +106,7 @@ def iter_rows(run_dir, faults):
 
 
 def write_phase_changes_csv(run_dir, out_file=None):
-    faults = read_json_retry(os.path.join(run_dir, "faults.json"))
+    outcomes = read_run_outcomes(run_dir)
     out_file = out_file or os.path.join(run_dir, DEFAULT_OUTPUT)
     fieldnames = [
         "program_id",
@@ -123,7 +120,7 @@ def write_phase_changes_csv(run_dir, out_file=None):
     with open(out_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(iter_rows(run_dir, faults))
+        writer.writerows(iter_rows(run_dir, outcomes))
 
     return out_file
 

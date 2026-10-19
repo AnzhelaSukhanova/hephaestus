@@ -8,6 +8,7 @@ from pathlib import Path
 from src.tools.ir_csv import DEFAULT_OUTPUT
 from src.tools.ir_coverage import (
     BACKENDS,
+    coverage_rows,
     default_output_dir,
     ensure_default_phase_csv,
     expand_arg,
@@ -16,10 +17,8 @@ from src.tools.ir_coverage import (
     infer_backend,
     lowering_columns,
     prepare_output_dir,
-    read_phase_csv,
     repo_root,
     run_command,
-    select_rows,
     selected_program_path,
     stage_program,
     validate_selected_programs,
@@ -176,8 +175,7 @@ def write_kover_report(output_dir, classes_dir, backend, ic_files, cli_jar):
 
 def run_kover_coverage(run_dir, columns, backend, csv_file, output_dir,
                        timeout, agent_jar, cli_jar):
-    fieldnames, phase_rows = read_phase_csv(csv_file)
-    rows = select_rows(fieldnames, phase_rows, columns)
+    rows = coverage_rows(run_dir, csv_file, columns)
     validate_selected_programs(run_dir, rows)
     prepare_kover_output_dir(output_dir)
 
