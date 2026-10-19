@@ -5,9 +5,9 @@ import os
 
 from src.args import parse_args, configure_generator, validate_args, pre_process_args
 from src.compilers.base import BaseCompiler
-from src.compilers.kotlin import KotlinCompiler, KotlinSettings
+from src.compilers.kotlin import KOTLIN_COMPARISON_VARIANTS, KotlinCompiler, KotlinSettings
 from src.modules.artifacts import Artifacts
-from src.modules.compilation import Compilation, COMPILERS
+from src.modules.compilation import Compilation, COMPILERS, ORDINARY_VARIANT
 from src.modules.coverage import LiveCoverage
 from src.modules.evaluation import Evaluation
 from src.modules.generation import Generation
@@ -15,6 +15,7 @@ from src.modules.worker_reporting import Reporting
 from src.modules.scheduler import Scheduler
 from src.modules.worker import RunOptions, create_manager
 from src.modules.crossmodule import CrossModuleManager
+from src.modules.oracle_modes import create_oracle_mode
 
 
 class Fuzzer:
@@ -26,18 +27,21 @@ class Fuzzer:
         self.manager: CrossModuleManager | None = None
         self.manager_pid: int | None = None
         self.artifacts = Artifacts(self.options)
+        self.mode = create_oracle_mode(self.options)
         self.generation = Generation(self.options, self.artifacts)
         compiler_cls = compiler_types[self.options.language]
         settings = (KotlinSettings(
             backend=self.options.backend, dump_ir=self.options.dump_ir)
             if issubclass(compiler_cls, KotlinCompiler) else None)
         self.compilation = Compilation(
-            self.options, self.artifacts, compiler_types, settings=settings)
+            self.options, self.artifacts, compiler_types, settings=settings,
+            settings_by_variant=(KOTLIN_COMPARISON_VARIANTS
+                                 if self.mode.compares_variants() else None))
         self.coverage = LiveCoverage(self.options, self.compilation)
         self.reporting = Reporting(self.options)
         self.evaluation = Evaluation(
             self.options, self.compilation, self.artifacts,
-            self.coverage, self.reporting)
+            self.coverage, self.reporting, mode=self.mode)
         self.scheduler = Scheduler(
             self.options, self.generation, self.evaluation, self.reporting,
             compiler_cls, compiler_settings=settings)
@@ -47,7 +51,10 @@ class Fuzzer:
         if self.manager_pid == process_id:
             return self.manager
         self.manager = create_manager(
-            self.options, compiler_version, self.scheduler.compiler_cls)
+            self.options, compiler_version, self.scheduler.compiler_cls,
+            settings_by_variant=(self.compilation.settings_by_variant
+                                 if self.mode.compares_variants() else None),
+            versions_by_variant=self.compilation.versions_by_variant)
         self.manager_pid = process_id
         self.generation.manager = self.manager
         self.evaluation.manager = self.manager
@@ -57,9 +64,21 @@ class Fuzzer:
     def start(self) -> None:
         validate_args(self.options)
         pre_process_args(self.options)
-        _, compiler_version = self.compilation.run_command(
-            self.compilation.version_command())
-        compiler_version = compiler_version.strip()
+        if self.mode.compares_variants():
+            try:
+                self.mode.preflight(self.compilation)
+            except ValueError as exc:
+                raise SystemExit('Error: Kotlin backend comparison preflight failed: '
+                                 + str(exc)) from exc
+            compiler_version = '\n'.join(
+                f'{variant_id}: {version}'
+                for variant_id, version in self.compilation.versions_by_variant.items())
+        else:
+            try:
+                self.compilation.discover_versions()
+            except ValueError as exc:
+                raise SystemExit('Error: compiler version discovery failed: ' + str(exc)) from exc
+            compiler_version = self.compilation.versions_by_variant[ORDINARY_VARIANT]
         self.setup_crossmodule_manager(compiler_version)
         self.coverage.setup_live_jacoco()
 
