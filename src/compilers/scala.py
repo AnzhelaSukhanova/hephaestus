@@ -17,7 +17,8 @@ class ScalaCompiler(BaseCompiler[None]):
         super().__init__(input_name, filter_patterns, settings=settings)
 
     @classmethod
-    def get_compiler_version(cls, settings: None = None) -> list[str]:
+    def get_compiler_version(cls, settings: None = None,
+                             scratch_directory: str | None = None) -> list[str]:
         return ['scalac', '-version']
 
     def get_compiler_cmd(self) -> list[str]:
