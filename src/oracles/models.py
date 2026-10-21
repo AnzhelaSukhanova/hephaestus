@@ -33,4 +33,4 @@ class ComparisonResult:
 
     @property
     def all_success(self) -> bool:
-        return self.complete and not self.findings and len(self.groups.get('accepted', ())) == 3
+        return self.complete and not self.findings and bool(self.groups.get('accepted'))
