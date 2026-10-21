@@ -16,7 +16,7 @@ from src.compilers.base import BaseCompiler
 from src.compilers.results import Diagnostic, ParsedDiagnostics
 
 
-type KotlinBackend = Literal['js', 'native', 'wasm']
+type KotlinBackend = Literal['js', 'native', 'wasm', 'jvm']
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class KotlinSettings:
     executable: str | None = None
 
 
-BACKENDS: tuple[KotlinBackend, ...] = ('js', 'native', 'wasm')
+BACKENDS: tuple[KotlinBackend, ...] = ('js', 'native', 'wasm', 'jvm')
 
 
 def _compiler_executable(settings: KotlinSettings) -> str:
@@ -41,6 +41,7 @@ KOTLIN_COMPARISON_VARIANTS: Mapping[str, KotlinSettings] = MappingProxyType({
     'js': KotlinSettings('js'),
     'native': KotlinSettings('native'),
     'wasm': KotlinSettings('wasm'),
+    'jvm': KotlinSettings('jvm'),
 })
 
 
@@ -80,10 +81,10 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
         self.dependency_aliases = dependency_aliases or {}
 
     def get_dependency_artifact_filename(self) -> str | None:
-        """KLIB file build leaves in its working directory."""
+        """KLIB (or, on JVM, JAR) file build leaves in its working directory."""
         if not self.module_name:
             return None
-        return self.module_name + '.klib'
+        return self.module_name + ('.jar' if self.settings.backend == 'jvm' else '.klib')
 
     def validate_dependency_artifact(self, path: str) -> bool:
         return self.read_manifest_depends(path) is not None
@@ -128,6 +129,20 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
                             '-o', output_name,
                             '-nowarn', '-Xklib-ir-inliner=full'])
             command.extend(self._native_dependency_flags())
+            return command
+        elif self.settings.backend == 'jvm':
+            # JVM runs codegen too and writes a linked JAR, which consumers
+            # put on their classpath.
+            output_name = self.module_name or input_name
+            if self.output_directory is not None and self.module_name is not None:
+                output_name = os.path.join(self.output_directory, self.module_name)
+            command.extend(['-d', output_name + '.jar', '-nowarn'])
+            if self.module_name:
+                command.extend(['-module-name', self.module_name])
+            if self.dependency_klibs:
+                command.extend(['-classpath', os.pathsep.join(self.dependency_klibs)])
+            if self.friend_klibs:
+                command.append('-Xfriend-paths=' + ','.join(self.friend_klibs))
             return command
         else:
             if self.module_name:
@@ -216,6 +231,8 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
     def stdlib_path(self) -> str:
         if self.settings.backend == 'native':
             return '$HOME/kotlin/kotlin-native/dist/klib/common/stdlib'
+        if self.settings.backend == 'jvm':
+            return '$HOME/kotlin/dist/kotlinc/lib/kotlin-stdlib.jar'
         is_wasm = self.settings.backend == 'wasm'
         return f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
 
@@ -242,9 +259,12 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
         """The user modules a KLIB records as its own dependencies.
 
         ``stdlib`` is dropped: only user modules say anything about the
-        module graph this run built.
+        module graph this run built. A JAR is usable once its
+        ``META-INF/MANIFEST.MF`` is readable, and yields an empty set: no
+        dependency names are extracted from it.
         """
-        manifest = 'default/manifest'
+        is_jar = klib_path.endswith('.jar')
+        manifest = 'META-INF/MANIFEST.MF' if is_jar else 'default/manifest'
         try:
             if os.path.isdir(klib_path):
                 with open(os.path.join(klib_path, manifest)) as source:
@@ -254,6 +274,8 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
                     text = archive.read(manifest).decode()
         except (OSError, KeyError, zipfile.BadZipFile):
             return None
+        if is_jar:
+            return set()
         for line in text.splitlines():
             if line.startswith('depends='):
                 return {module
