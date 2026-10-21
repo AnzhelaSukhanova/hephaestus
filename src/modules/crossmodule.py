@@ -133,12 +133,12 @@ class CrossModuleManager:
         return os.path.join(self.test_directory, 'klibs')
 
     def published_klib_path(self, pid: int, variant_id: str | None = None) -> str:
-        """Where a published KLIB lives; consumers reference it in place."""
+        """Where a published KLIB (a JAR on JVM) lives; consumers reference it in place."""
         if variant_id is not None:
             return os.path.join(self.test_directory,
-                                self._variant_file(pid, variant_id, '.klib'))
+                                self.variant_publication(pid, variant_id)['klib'])
         return os.path.join(self.published_klibs_dir(),
-                            f'd{pid}.klib')
+                            f'd{pid}.jar' if self.backend == 'jvm' else f'd{pid}.klib')
 
     @staticmethod
     def _variant_file(pid: int, variant_id: str, suffix: str) -> str:
@@ -146,9 +146,10 @@ class CrossModuleManager:
         return os.path.join('klibs', f'd{pid}-{variant_id}{suffix}')
 
     def variant_publication(self, pid: int, variant_id: str) -> VariantPublication:
-        return {'backend': self.settings_by_variant[variant_id].backend,
+        backend = self.settings_by_variant[variant_id].backend
+        return {'backend': backend,
                 'module_name': f'd{pid}',
-                'klib': self._variant_file(pid, variant_id, '.klib'),
+                'klib': self._variant_file(pid, variant_id, '.jar' if backend == 'jvm' else '.klib'),
                 'metadata': self._variant_file(pid, variant_id, '.meta.json')}
 
     def _source_identity(self, pid: int, source: str) -> str:
