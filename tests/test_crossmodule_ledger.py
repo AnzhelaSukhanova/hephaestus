@@ -1,8 +1,10 @@
 import json
 from copy import deepcopy
+import zipfile
 
 import pytest
 
+from src.compilers.kotlin import KotlinCompiler
 from src.generators.config import cfg
 from src.ir import ast, kotlin_types as kt
 from src.ir.context import Context
@@ -61,13 +63,13 @@ class _ImportedContext(Context):
         self.prepared = True
 
 
-def _manager(test_directory, max_module_chain_depth=0, load_program=None):
+def _manager(test_directory, max_module_chain_depth=0, load_program=None, backend="native"):
     config = deepcopy(cfg)
     config.prob.crossmodule_probability = 1.0
     config.prob.max_module_chain_depth = max_module_chain_depth
     config.prob.drop_indirect_deps_prob = 0.0
     return CrossModuleManager(
-        str(test_directory), config, "native", "test",
+        str(test_directory), config, backend, "test",
         lambda _: None, _Random(),
         load_program or (lambda _: (_ for _ in ()).throw(AssertionError())),
     )
@@ -327,6 +329,52 @@ def test_manifest_disagreement_is_klib_evidence_not_ledger_state(tmp_path, capsy
     assert _candidates(lab) == [3, 7]
     assert manager.publication_record(7)["closure"] == [7, 3]
     assert not list(lab.glob("*.tmp"))
+
+
+def _write_jar(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+    return str(path)
+
+
+def test_jvm_providers_are_published_and_consumed_as_jars(tmp_path):
+    lab = tmp_path / "lab"
+    _write_ledger(lab, {"3": {"direct": None, "closure": []}})
+    (lab / "3").mkdir()
+    (lab / "3" / "program.kt.bin").write_bytes(b"")
+    manager = _manager(lab, load_program=lambda _: ast.Program(Context(), "kotlin"),
+                       backend="jvm")
+    manager.read_manifest_depends = KotlinCompiler.read_manifest_depends
+
+    assert manager.published_klib_path(7) == str(lab / "klibs" / "d7.jar")
+    # A provider is a candidate only once its JAR is published.
+    (lab / "klibs").mkdir()
+    (lab / "klibs" / "d3.klib").write_bytes(b"")
+    assert manager.provider_candidates(99) == []
+    _write_jar(lab / "klibs" / "d3.jar")
+    assert manager.provider_candidates(99) == [3]
+
+    source_dir = lab / "tmp" / "7"
+    source_dir.mkdir(parents=True)
+    (source_dir / "program.kt").write_text("fun main() {}")
+    (source_dir / "program.kt.bin").write_bytes(b"pickle")
+    command = ["kotlinc-jvm", "-d", "d7.jar", "-Xfriend-paths=d3.jar"]
+    record = manager.publish_provider(7, _write_jar(lab / "batch" / "d7.jar"), command, 3)
+
+    # No dependency names are extracted from a JAR, so there is no manifest diff.
+    assert record == {"direct": 3, "closure": [3]}
+    metadata = json.loads((lab / "klibs" / "d7.meta.json").read_text())
+    assert metadata["backend"] == "jvm"
+    assert metadata["command"] == command
+    assert "manifest_diff" not in metadata
+    assert KotlinCompiler.read_manifest_depends(str(lab / "klibs" / "d7.jar")) == set()
+    manager.commit_publications({7: record})
+    assert manager.provider_candidates(99) == [3, 7]
+    assert manager.dependency_klibs([7, 3]) == [
+        str((lab / "klibs" / "d7.jar").resolve()),
+        str((lab / "klibs" / "d3.jar").resolve()),
+    ]
 
 
 def test_commit_publications_merges_batches_atomically(tmp_path, monkeypatch):

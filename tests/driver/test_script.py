@@ -82,7 +82,7 @@ def test_script_artifacts(tmp_path: Path, scenario: str,
 
 
 @pytest.mark.parametrize('scenario, crashed', [
-    ('comparison_crash', ('js', 'native', 'wasm')),
+    ('comparison_crash', ('js', 'native', 'wasm', 'jvm')),
     ('comparison_backend_crash', ('native', 'wasm')),
 ])
 def test_comparison_crash_artifacts(tmp_path: Path, scenario: str,
@@ -114,15 +114,15 @@ def test_comparison_crash_artifacts(tmp_path: Path, scenario: str,
     groups = record(comparison['groups'])
     assert groups['crashed'] == list(crashed)
     assert groups.get('accepted', []) == [
-        variant for variant in ('js', 'native', 'wasm') if variant not in crashed]
+        variant for variant in ('js', 'native', 'wasm', 'jvm') if variant not in crashed]
     assert comparison['incomplete_reasons'] == []
     time_metrics = record(json.loads((root / 'time_metrics.json').read_text()))
     assert fault['time_metrics'] == time_metrics['1']
-    assert set(record(record(time_metrics['1'])['variants'])) == {'js', 'native', 'wasm'}
+    assert set(record(record(time_metrics['1'])['variants'])) == {'js', 'native', 'wasm', 'jvm'}
     case = root / '1'
     assert (case / 'program.kt').is_file()
     assert record(json.loads((case / 'comparison.json').read_text()))['comparison'] == comparison
-    for variant in ('js', 'native', 'wasm'):
+    for variant in ('js', 'native', 'wasm', 'jvm'):
         retained = record(json.loads((case / 'variants' / variant / 'result.json').read_text()))
         assert retained['backend'] == variant
         output = (case / 'variants' / variant / 'output.txt').read_text()
@@ -136,11 +136,12 @@ def test_comparison_crash_artifacts(tmp_path: Path, scenario: str,
             assert retained['status'] is True and retained['artifact_valid'] is True
     assert not (root / 'tmp').exists()
     tools = [record(json.loads(line)) for line in (tmp_path / 'tool.jsonl').read_text().splitlines()]
-    # Each variant runs its version probe, preflight KLIB and the program itself.
+    # Each variant runs its version probe, preflight artifact and the program itself.
     versions = [tool for tool in tools if '-version' in record_arguments(tool)]
-    assert len(versions) == 3 and len(tools) == 9
-    compiled = [record_arguments(tool) for tool in tools[-3:]]
-    assert ['-produce' in arguments for arguments in compiled] == [False, True, False]
+    assert len(versions) == 4 and len(tools) == 12
+    compiled = [record_arguments(tool) for tool in tools[-4:]]
+    assert ['-produce' in arguments for arguments in compiled] == [False, True, False, False]
+    assert compiled[3][compiled[3].index('-d') + 1].endswith('d1.jar')
     wasm_libraries = compiled[2][compiled[2].index('-libraries') + 1]
     assert 'kotlin-stdlib-wasm-js-' in wasm_libraries
     assert '-Xwasm' not in compiled[2]

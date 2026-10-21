@@ -24,13 +24,13 @@ class _Random(RandomUtils):
         return probability == 1.0
 
 
-def _manager(test_directory, drop_probability=0.0):
+def _manager(test_directory, drop_probability=0.0, backend='native'):
     config = deepcopy(cfg)
     config.prob.crossmodule_probability = 1.0
     config.prob.max_module_chain_depth = 0
     config.prob.drop_indirect_deps_prob = drop_probability
     return CrossModuleManager(
-        str(test_directory), config, 'native', 'test', lambda _: None,
+        str(test_directory), config, backend, 'test', lambda _: None,
         _Random(), lambda _: None)
 
 
@@ -40,9 +40,11 @@ def test_dependency_klibs_resolves_ordered_ids_to_each_artifact_layout(tmp_path)
         'js': KotlinSettings(backend='js'),
         'native': KotlinSettings(backend='native'),
         'wasm': KotlinSettings(backend='wasm'),
+        'jvm': KotlinSettings(backend='jvm'),
     }
     ordinary = manager.dependency_klibs((17, 3))
     js = manager.dependency_klibs((17, 3), 'js')
+    jvm = manager.dependency_klibs((17, 3), 'jvm')
 
     assert ordinary == [
         str((tmp_path / 'klibs' / 'd17.klib').resolve()),
@@ -51,6 +53,17 @@ def test_dependency_klibs_resolves_ordered_ids_to_each_artifact_layout(tmp_path)
     assert js == [
         str((tmp_path / 'klibs' / 'd17-js.klib').resolve()),
         str((tmp_path / 'klibs' / 'd3-js.klib').resolve()),
+    ]
+    assert jvm == [
+        str((tmp_path / 'klibs' / 'd17-jvm.jar').resolve()),
+        str((tmp_path / 'klibs' / 'd3-jvm.jar').resolve()),
+    ]
+
+
+def test_ordinary_jvm_dependencies_resolve_to_published_jars(tmp_path):
+    assert _manager(tmp_path, backend='jvm').dependency_klibs((17, 3)) == [
+        str((tmp_path / 'klibs' / 'd17.jar').resolve()),
+        str((tmp_path / 'klibs' / 'd3.jar').resolve()),
     ]
 
 

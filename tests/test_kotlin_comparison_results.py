@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import sys
+import zipfile
 
 import pytest
 
@@ -12,7 +13,7 @@ from src.compilers.results import CompilationRequest, Diagnostic
 from tests.test_compilation_variants import components
 
 
-@pytest.mark.parametrize('backend', ['native', 'js', 'wasm'])
+@pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 def test_isolated_klib_commands(tmp_path, backend):
     root = tmp_path / 'source with spaces'
     root.mkdir()
@@ -29,16 +30,24 @@ def test_isolated_klib_commands(tmp_path, backend):
     assert command[0].endswith('/kotlinc-' + backend)
     assert command[1] == str(source)
     assert command.count(str(source)) == 1
+    artifact = 'd2.jar' if backend == 'jvm' else 'd2.klib'
     if backend == 'native':
         assert command[command.index('-o') + 1] == str(destination / 'd2')
         assert command[command.index('-produce') + 1] == 'library'
+    elif backend == 'jvm':
+        assert command[command.index('-d') + 1] == str(destination / 'd2.jar')
+        assert command[command.index('-module-name') + 1] == 'd2'
+        assert command[command.index('-classpath') + 1] == 'd1-jvm.klib'
+        assert '-Xfriend-paths=d1-jvm.klib' in command
+        assert not any(argument.startswith(('-Xklib-ir-inliner', '-libraries', '-include-runtime'))
+                       for argument in command)
     else:
         assert '-Xir-produce-klib-file' in command
         assert command[command.index('-ir-output-dir') + 1] == str(destination)
         assert '-Xwasm' not in command
         libraries = command[command.index('-libraries') + 1]
         assert ('kotlin-stdlib-wasm-js-' in libraries) == (backend == 'wasm')
-    assert compiler.get_dependency_artifact_filename() == 'd2.klib'
+    assert compiler.get_dependency_artifact_filename() == artifact
 
 
 def test_dependency_artifact_validation_is_compiler_owned(tmp_path):
@@ -48,14 +57,29 @@ def test_dependency_artifact_validation_is_compiler_owned(tmp_path):
     assert KotlinCompiler('source').validate_dependency_artifact(str(klib))
     assert not KotlinCompiler('source').validate_dependency_artifact(str(tmp_path / 'missing.klib'))
     assert not BaseCompiler('source', settings=None).validate_dependency_artifact(str(klib))
+    jvm = KotlinCompiler('source', settings=KotlinSettings('jvm'))
+    jar = tmp_path / 'd1.jar'
+    with zipfile.ZipFile(jar, 'w') as archive:
+        archive.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\n')
+    assert jvm.validate_dependency_artifact(str(jar))
+    # No dependency names are extracted from a JAR.
+    assert KotlinCompiler.read_manifest_depends(str(jar)) == set()
+    without_manifest = tmp_path / 'empty.jar'
+    with zipfile.ZipFile(without_manifest, 'w') as archive:
+        archive.writestr('d1/A.class', b'')
+    not_a_zip = tmp_path / 'broken.jar'
+    not_a_zip.write_text('not a zip')
+    for unusable in (without_manifest, not_a_zip, tmp_path / 'missing.jar'):
+        assert KotlinCompiler.read_manifest_depends(str(unusable)) is None
+        assert not jvm.validate_dependency_artifact(str(unusable))
 
 
-@pytest.mark.parametrize('backend', ['native', 'js', 'wasm'])
+@pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 def test_version_probe_preparation(tmp_path, backend):
     settings = KotlinSettings(backend)
     assert KotlinCompiler.get_compiler_version(settings)[1:] == ['-version']
     command = KotlinCompiler.get_compiler_version(settings, str(tmp_path))
-    if backend == 'native':
+    if backend in ('native', 'jvm'):
         assert command[1:] == ['-version']
     else:
         assert command[command.index('-ir-output-name') + 1]
@@ -63,7 +87,7 @@ def test_version_probe_preparation(tmp_path, backend):
 
 
 def test_comparison_preset_is_plain_immutable_settings():
-    assert tuple(KOTLIN_COMPARISON_VARIANTS) == ('js', 'native', 'wasm')
+    assert tuple(KOTLIN_COMPARISON_VARIANTS) == ('js', 'native', 'wasm', 'jvm')
     assert all(settings.backend == variant_id
                for variant_id, settings in KOTLIN_COMPARISON_VARIANTS.items())
     wasm = KotlinSettings('wasm')

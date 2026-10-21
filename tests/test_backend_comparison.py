@@ -100,6 +100,9 @@ def fixture_tool(tmp_path):
         "import sys, pathlib, zipfile\n"
         "a = sys.argv[1:]\n"
         "if '-version' in a:\n    print('Kotlin compiler 2.4.255-SNAPSHOT'); sys.exit(0)\n"
+        "if '-d' in a:\n"
+        "    with zipfile.ZipFile(a[a.index('-d')+1], 'w') as z: z.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\\n')\n"
+        "    sys.exit(0)\n"
         "if '-o' in a: p = pathlib.Path(a[a.index('-o')+1] + '.klib')\n"
         "else: p = pathlib.Path(a[a.index('-ir-output-dir')+1]) / (a[a.index('-ir-output-name')+1] + '.klib')\n"
         "with zipfile.ZipFile(p, 'w') as z: z.writestr('default/manifest', 'depends=stdlib\\n')\n")
@@ -107,7 +110,7 @@ def fixture_tool(tmp_path):
     return tool
 
 
-def test_preflight_produces_three_dependency_artifacts_and_versions(tmp_path, monkeypatch):
+def test_preflight_produces_four_dependency_artifacts_and_versions(tmp_path, monkeypatch):
     app = application(tmp_path)
     tool = fixture_tool(tmp_path)
     library = tmp_path / 'stdlib'
@@ -122,12 +125,21 @@ def test_preflight_produces_three_dependency_artifacts_and_versions(tmp_path, mo
         return run_command(arguments, get_stdout, cwd)
 
     monkeypatch.setattr(app.compilation, 'run_command', recorded)
+    validated = []
+    validate = KotlinCompiler.validate_dependency_artifact
+
+    def recorded_validation(self, path):
+        validated.append(Path(path).name)
+        return validate(self, path)
+
+    monkeypatch.setattr(KotlinCompiler, 'validate_dependency_artifact', recorded_validation)
     app.mode.preflight(app.compilation)
     versions = app.compilation.versions_by_variant
-    assert set(versions) == {'js', 'native', 'wasm'}
+    assert set(versions) == {'js', 'native', 'wasm', 'jvm'}
     assert all(version == 'Kotlin compiler 2.4.255-SNAPSHOT' for version in versions.values())
     # One probe per variant, prepared by the compiler for its backend.
-    assert [('-ir-output-name' in command) for command in commands] == [True, False, True]
+    assert [('-ir-output-name' in command) for command in commands] == [True, False, True, False]
+    assert sorted(validated) == ['fixture.jar', 'fixture.klib', 'fixture.klib', 'fixture.klib']
     tool.unlink()
     with pytest.raises(ValueError, match='missing compiler executable'):
         app.mode.preflight(app.compilation)
@@ -201,7 +213,7 @@ def test_preflight_reuses_compilation_construction(tmp_path, monkeypatch):
                         cwd=None: (True, 'Kotlin compiler version 2.4.255-SNAPSHOT\n'))
     monkeypatch.setattr(app.compilation, 'run_variants', run_variants)
     app.mode.preflight(app.compilation)
-    assert [request.variant_id for request in requests] == ['js', 'native', 'wasm']
+    assert [request.variant_id for request in requests] == ['js', 'native', 'wasm', 'jvm']
     assert all(isinstance(request.compiler, KotlinCompiler)
                and request.compiler.klib_output for request in requests)
     assert [request.compiler.settings for request in requests] == list(

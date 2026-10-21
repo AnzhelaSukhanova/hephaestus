@@ -23,7 +23,7 @@ def rejecting_tool(app, target='js'):
     tool = Path(app.compilation.settings_by_variant['js'].executable)
     tool.write_text(tool.read_text().replace('a = sys.argv[1:]\n',
         'a = sys.argv[1:]\n'
-        "backend = ('native' if '-produce' in a else 'wasm' if any(\n"
+        "backend = ('native' if '-produce' in a else 'jvm' if '-d' in a else 'wasm' if any(\n"
         "    'kotlin-stdlib-wasm-' in item for item in a) else 'js')\n"
         f"if backend == {target!r}:\n"
         "    print(a[0] + ':1:1: error: controlled rejection'); sys.exit(1)\n"))
@@ -34,17 +34,20 @@ def dependency_checking_tool(app):
     tool.write_text(tool.read_text().replace('a = sys.argv[1:]\n',
         'a = sys.argv[1:]\n'
         'import os\n'
-        'for arg in a:\n'
+        'for index, arg in enumerate(a):\n'
+        "    if index and a[index - 1] == '-d': continue  # The JVM output.\n"
         "    for item in arg.split('=')[-1].split(os.pathsep):\n"
-        "        if (item.endswith('.klib') and 'stdlib' not in item\n"
+        "        if (item.endswith(('.klib', '.jar')) and 'stdlib' not in item\n"
         '                and not os.path.exists(item)):\n'
         "            print('missing library ' + item); sys.exit(3)\n", 1))
 
 
 def referenced_klibs(argv):
-    return [item for argument in argv
+    """Dependency artifacts on a command line, excluding a JVM `-d` output."""
+    return [item for index, argument in enumerate(argv)
+            if not (index and argv[index - 1] == '-d')
             for item in argument.split('=')[-1].split(os.pathsep)
-            if item.endswith('.klib') and 'stdlib' not in item]
+            if item.endswith(('.klib', '.jar')) and 'stdlib' not in item]
 
 
 def test_reporting_json_default_serializes_comparison_dependencies():
@@ -109,7 +112,8 @@ def test_fault_evidence_includes_all_attempts_even_without_metrics(
         assert evidence['reproduce_argv'][1] == 'program.kt'
         assert not any(directory in arg for arg in evidence['reproduce_argv'])
         if backend != 'js':
-            assert (retained / 'variants' / backend / 'd1.klib').exists()
+            artifact = 'd1.jar' if backend == 'jvm' else 'd1.klib'
+            assert (retained / 'variants' / backend / artifact).exists()
     assert json.loads((Path(app.options.test_directory) / 'faults.json').read_text())['1']['error']
     fault_dependencies = json.loads(
         (Path(app.options.test_directory) / 'faults.json').read_text()
@@ -145,7 +149,7 @@ def test_inconclusive_is_not_counted_as_pass_and_references_published_dependenci
         'variants': variants,
     }
     assert manifest['available_dependencies'] == {
-        '1': {'js': True, 'native': False, 'wasm': True}}
+        '1': {'js': True, 'native': False, 'wasm': True, 'jvm': True}}
     assert not (retained / 'dependencies').exists()
     assert Path(app.manager.published_klib_path(1, 'js')).exists()
     assert (Path(app.options.test_directory) / '1' / 'program.kt.bin').exists()
@@ -191,7 +195,8 @@ def test_reproductions_reference_published_direct_and_transitive_dependencies(
         evidence = json.loads((retained / 'variants' / backend / 'result.json').read_text())
         argv = evidence['reproduce_argv']
         assert str(run) not in ' '.join(argv)
-        direct, transitive = (os.path.join('..', 'klibs', f'd{pid}-{backend}.klib')
+        suffix = '.jar' if backend == 'jvm' else '.klib'
+        direct, transitive = (os.path.join('..', 'klibs', f'd{pid}-{backend}{suffix}')
                               for pid in (2, 1))
         assert referenced_klibs(argv) == [direct, transitive, direct]
         for pid, path in ((2, direct), (1, transitive)):
@@ -248,7 +253,7 @@ def test_worker_comparison_returns_reproducible_case_and_parent_commits_bundle(
     assert not CROSSMODULE_STATS_FIELDS & app.reporting.stats.keys()
 
 
-def test_replayed_program_runs_through_preflight_and_three_variants(tmp_path, monkeypatch):
+def test_replayed_program_runs_through_preflight_and_four_variants(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg.prob, 'crossmodule_probability', 0)
     source = tmp_path / 'input.bin'
     replay(source)
@@ -263,8 +268,8 @@ def test_replayed_program_runs_through_preflight_and_three_variants(tmp_path, mo
     destination = Path(app.options.test_directory)
     assert app.reporting.stats['totals'] == {'passed': 1, 'failed': 0, 'inconclusive': 0}
     assert set(json.loads((destination / '1' / 'comparison.json').read_text())['compiler_versions']) == {
-        'js', 'native', 'wasm'}
+        'js', 'native', 'wasm', 'jvm'}
     assert set((destination / '1' / 'variants' / backend / 'result.json').exists()
                for backend in app.compilation.settings_by_variant) == {True}
     assert app.reporting.stats['compilation_time'] > 0
-    assert len(app.reporting.stats['time_metrics'][1]['variants']) == 3
+    assert len(app.reporting.stats['time_metrics'][1]['variants']) == 4

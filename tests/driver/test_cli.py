@@ -67,7 +67,7 @@ def test_help_exits_before_running_driver(tmp_path: Path, argument: str) -> None
 
 @pytest.mark.parametrize(("arguments", "message"), [
     (["--language", "rust"], "invalid choice: 'rust'"),
-    (["--backend", "jvm"], "invalid choice: 'jvm'"),
+    (["--backend", "android"], "invalid choice: 'android'"),
     (["--transformation-types", "missing"], "invalid choice: 'missing'"),
     (["--workers", "many"], "invalid int value: 'many'"),
     (["--iterations", "many"], "invalid int value: 'many'"),

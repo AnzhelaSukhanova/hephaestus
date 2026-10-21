@@ -7,6 +7,7 @@ import pytest
 
 from src.compilers.kotlin import KOTLIN_COMPARISON_VARIANTS, KotlinCompiler
 from src.compilers.results import CompilationRequest
+from src.oracles.backend_comparison import check_backend_compilation
 from tests.test_backend_comparison import application
 
 
@@ -37,16 +38,18 @@ def compile_source(app, root, module, source, direct=None, closure=()):
     for variant_id, settings in app.compilation.settings_by_variant.items():
         destination = root / module / variant_id
         destination.mkdir()
-        paths = [str(root / parent / variant_id / (parent + '.klib'))
+        suffix = '.jar' if settings.backend == 'jvm' else '.klib'
+        paths = [str(root / parent / variant_id / (parent + suffix))
                  for parent in closure]
-        friends = ([str(root / direct / variant_id / (direct + '.klib'))]
+        friends = ([str(root / direct / variant_id / (direct + suffix))]
                    if direct else [])
         compiler = app.compilation.make_compiler(
             str(filename), module_name=module,
             output_directory=str(destination), klib_output=True,
             dependency_klibs=paths, friend_klibs=friends, settings=settings)
-        requests.append(CompilationRequest(variant_id, compiler, str(destination),
-                                           str(destination / (module + '.klib'))))
+        requests.append(CompilationRequest(
+            variant_id, compiler, str(destination),
+            str(destination / compiler.get_dependency_artifact_filename())))
     return app.compilation.run_variants(requests)
 
 
@@ -63,6 +66,22 @@ def test_real_valid_and_invalid_sources_on_all_backends(real_kotlin, tmp_path):
         assert variant.command.errors, (variant.variant_id, variant.command.output)
         assert variant.command.parsing_complete, (variant.variant_id,
                                                    variant.command.unparsed)
+
+
+def test_real_jvm_only_codegen_rejection_is_a_status_mismatch(real_kotlin, tmp_path):
+    variants = compile_source(real_kotlin, tmp_path, 'clash',
+                              'package src.clash\n'
+                              'fun foo(x: List<String>) = 1\n'
+                              'fun foo(x: List<Int>) = 2\n')
+    verdict = check_backend_compilation(
+        {variant.variant_id: variant for variant in variants},
+        tuple(real_kotlin.compilation.settings_by_variant))
+    assert verdict.complete, verdict.incomplete_reasons
+    assert verdict.groups['accepted'] == ('js', 'native', 'wasm')
+    assert verdict.groups['rejected'] == ('jvm',)
+    assert [finding.kind for finding in verdict.findings] == ['status_mismatch']
+    jvm = next(variant for variant in variants if variant.variant_id == 'jvm')
+    assert 'platform declaration clash' in jvm.command.output
 
 
 def test_real_target_matched_friend_and_transitive_chain(real_kotlin, tmp_path):
@@ -83,6 +102,10 @@ def test_real_target_matched_friend_and_transitive_chain(real_kotlin, tmp_path):
                 variant.expected_dependency_artifact_path)
             assert manifest is not None
             assert not any('-' + variant.variant_id in name for name in manifest)
+            if variant.variant_id == 'jvm':
+                # No dependency names are extracted from a JAR.
+                assert manifest == set()
+                assert variant.expected_dependency_artifact_path.endswith(module + '.jar')
             if variant.variant_id in ('js', 'wasm'):
                 with zipfile.ZipFile(variant.expected_dependency_artifact_path) as archive:
                     metadata = dict(line.split('=', 1)

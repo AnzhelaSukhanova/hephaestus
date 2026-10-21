@@ -45,6 +45,7 @@ def _comparison_crash() -> None:
         'js': Path('hermetic-kotlin-stdlib-js-2.4.255-SNAPSHOT.klib').resolve(),
         'native': Path('hermetic-kotlin-stdlib-native.klib').resolve(),
         'wasm': Path('hermetic-kotlin-stdlib-wasm-js-2.4.255-SNAPSHOT.klib').resolve(),
+        'jvm': Path('hermetic-kotlin-stdlib.jar').resolve(),
     }
     for library in libraries.values():
         library.write_text('')

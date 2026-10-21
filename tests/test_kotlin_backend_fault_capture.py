@@ -290,12 +290,12 @@ def test_kotlin_backend_comparison_records_backend_exceptions(
         tmp_path, "backend-comparison", "native", fixture_name, source)
 
     expected = commands["expected"]
-    assert set(expected) == {"js", "native", "wasm"}
+    assert set(expected) == {"js", "native", "wasm", "jvm"}
     executed = commands["executed"]
-    # Version probes and the KLIB preflight run without the language flag.
-    assert not any(LANGUAGE_FLAG in command for command in executed[:-3])
-    assert executed[-3:] == [expected[variant_id] + [LANGUAGE_FLAG]
-                             for variant_id in ("js", "native", "wasm")]
+    # Version probes and the fixture preflight run without the language flag.
+    assert not any(LANGUAGE_FLAG in command for command in executed[:-4])
+    assert executed[-4:] == [expected[variant_id] + [LANGUAGE_FLAG]
+                             for variant_id in ("js", "native", "wasm", "jvm")]
 
     fault = assert_crash_accounting(run_dir)
     assert fault["oracle"] == "backend-comparison"

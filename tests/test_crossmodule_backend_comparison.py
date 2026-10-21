@@ -37,6 +37,14 @@ def test_variant_publication_matches_published_paths(tmp_path, monkeypatch):
     }
     assert app.manager.published_klib_path(17, 'wasm') == str(
         Path(app.manager.test_directory) / publication['klib'])
+    jvm = app.manager.variant_publication(17, 'jvm')
+    assert jvm == {
+        'backend': 'jvm', 'module_name': 'd17',
+        'klib': os.path.join('klibs', 'd17-jvm.jar'),
+        'metadata': os.path.join('klibs', 'd17-jvm.meta.json'),
+    }
+    assert app.manager.published_klib_path(17, 'jvm') == str(
+        Path(app.manager.test_directory) / jvm['klib'])
 
 
 def test_publication_logic_errors_use_publication_error(tmp_path, monkeypatch):
@@ -107,24 +115,35 @@ def test_three_node_chain_matching_targets_friends_and_commit(tmp_path, monkeypa
         directory, program = case(app, tmp_path, pid, direct, closure)
         result = app.evaluation.check_oracle(directory, {pid: program})
         assert not result.faults and not result.inconclusive
-        assert len(commands) == pid * 3  # No correctness-based provider recompilation.
+        variant_count = len(app.compilation.settings_by_variant)
+        # No correctness-based provider recompilation.
+        assert len(commands) == pid * variant_count
         record = result.publications[pid]
         assert record['direct'] == direct and record['closure'] == closure
-        assert set(record['variants']) == {'js', 'native', 'wasm'}
+        assert set(record['variants']) == {'js', 'native', 'wasm', 'jvm'}
         assert pid not in app.manager.provider_candidates(99)  # No ledger advertisement yet.
-        for backend, command in commands[-3:]:
+        for backend, command in commands[-variant_count:]:
             expected = [str(Path(app.manager.published_klib_path(item, backend)).resolve())
                         for item in closure]
             if backend == 'native':
                 libraries = [command[index + 1] for index, arg in enumerate(command) if arg == '-library']
                 if expected:
                     assert command[command.index('-friend-modules') + 1] == expected[0]
+            elif backend == 'jvm':
+                assert all(path.endswith('-jvm.jar') for path in expected)
+                assert Path(command[command.index('-d') + 1]).name == f'd{pid}.jar'
+                assert command[command.index('-module-name') + 1] == f'd{pid}'
+                libraries = (command[command.index('-classpath') + 1].split(os.pathsep)
+                             if expected else [])
+                if expected:
+                    assert command[-1] == '-Xfriend-paths=' + expected[0]
             else:
                 libraries = command[command.index('-libraries') + 1].split(':')[1:]
                 if expected:
-                    assert command[command.index('-Xfriend-modules') + 1] == expected[0]
+                    assert command[-1] == '-Xfriend-modules=' + expected[0]
             assert libraries == expected
-            assert f'd{pid}-{backend}.klib' not in command  # Physical suffixes do not rename the module.
+            # Physical suffixes do not rename the module.
+            assert not any(f'd{pid}-{backend}' in argument for argument in command)
             metadata = json.loads((Path(app.options.test_directory) /
                                    record['variants'][backend]['metadata']).read_text())
             assert metadata['backend'] == backend and metadata['module_name'] == f'd{pid}'
@@ -135,7 +154,7 @@ def test_three_node_chain_matching_targets_friends_and_commit(tmp_path, monkeypa
     assert sorted(path.name for path in Path(app.manager.published_klibs_dir()).iterdir()) == sorted(
         f'd{pid}-{variant_id}{suffix}' for pid in (1, 2, 3)
         for variant_id in app.compilation.settings_by_variant
-        for suffix in ('.klib', '.meta.json'))
+        for suffix in ('.jar' if variant_id == 'jvm' else '.klib', '.meta.json'))
     monkeypatch.setattr(app.manager.random, 'choice', lambda choices: 3)
     prepared = app.manager.prepare_dependency(4)
     assert prepared['closure'] == [3, 2, 1]
@@ -174,7 +193,7 @@ def test_selected_missing_dependency_blocks_only_affected_variant(tmp_path, monk
     assert not result.faults and not result.publications
     assert 2 in result.inconclusive
     groups = program.stats['comparison']['groups']
-    assert groups['accepted'] == ('js', 'wasm')
+    assert groups['accepted'] == ('js', 'wasm', 'jvm')
     assert groups['unavailable'] == ('native',)
 
 
@@ -272,7 +291,10 @@ def test_unpacked_artifact_publication(tmp_path, monkeypatch):
     requests, _ = app.mode._prepare_requests(app.evaluation, directory, 1, program)
     observations = app.compilation.run_variants(requests)
     import zipfile
+    # Only KLIBs have an unpacked form; the JVM variant keeps its JAR.
     for observation in observations:
+        if observation.settings.backend == 'jvm':
+            continue
         path = Path(observation.produced_dependency_artifact_path)
         with zipfile.ZipFile(path) as archive:
             manifest = archive.read('default/manifest')
@@ -284,14 +306,18 @@ def test_unpacked_artifact_publication(tmp_path, monkeypatch):
     app.manager.save_ledger({'1': record})
     assert app.manager.provider_candidates(2) == [1]
     assert all(Path(app.manager.published_klib_path(1, backend)).is_dir()
-               for backend in app.compilation.settings_by_variant)
+               for backend in app.compilation.settings_by_variant if backend != 'jvm')
+    assert Path(app.manager.published_klib_path(1, 'jvm')).is_file()
 
 
 @pytest.mark.parametrize('target,mode,fault,inconclusive', [
     ('all', 'reject', False, False),
     ('js', 'reject', True, False),
     ('native', 'crash', True, False),
+    ('jvm', 'reject', True, False),
+    ('jvm', 'crash', True, False),
     ('wasm', 'missing', False, True),
+    ('jvm', 'missing', False, True),
     ('js', 'opaque', False, True),
 ])
 def test_unsuccessful_bundles_are_never_providers(
@@ -300,7 +326,7 @@ def test_unsuccessful_bundles_are_never_providers(
     tool = Path(app.compilation.settings_by_variant['js'].executable)
     tool.write_text(tool.read_text().replace('a = sys.argv[1:]\n',
         'a = sys.argv[1:]\n'
-        "backend = ('native' if '-produce' in a else 'wasm' if any(\n"
+        "backend = ('native' if '-produce' in a else 'jvm' if '-d' in a else 'wasm' if any(\n"
         "    'kotlin-stdlib-wasm-' in item for item in a) else 'js')\n"
         f"if {target!r} in ('all', backend):\n"
         f"    mode = {mode!r}\n"
@@ -313,3 +339,11 @@ def test_unsuccessful_bundles_are_never_providers(
     assert bool(result.faults) == fault
     assert bool(result.inconclusive) == inconclusive
     assert not result.publications and not app.manager.provider_candidates(2)
+    if target == 'jvm' and fault:
+        comparison = result.faults[1]['comparison']
+        assert ('jvm' in comparison['groups'].get('rejected', ())) == (mode == 'reject')
+        assert ('jvm' in comparison['groups'].get('crashed', ())) == (mode == 'crash')
+        kinds = [finding['kind'] for finding in comparison['findings']]
+        assert kinds == (['status_mismatch'] if mode == 'reject' else ['crash'])
+        retained = Path(app.options.test_directory) / '1' / 'variants' / 'jvm'
+        assert (retained / 'result.json').exists() and (retained / 'output.txt').exists()

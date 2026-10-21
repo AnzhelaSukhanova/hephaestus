@@ -30,7 +30,7 @@ def observation(variant_id, accepted=False, errors=(ERROR,),
                               settings=KotlinSettings(backend=backend))
 
 
-@pytest.mark.parametrize('statuses', list(product((False, True), repeat=3)))
+@pytest.mark.parametrize('statuses', list(product((False, True), repeat=len(BACKENDS))))
 def test_symmetric_acceptance(statuses):
     results = {variant_id: observation(variant_id, accepted, backend=variant_id)
                for variant_id, accepted in zip(BACKENDS, statuses)}
@@ -52,12 +52,31 @@ def test_diagnostic_order_multiplicity_and_meaning():
     assert not check_backend_compilation(results, BACKENDS).findings
     results['wasm'] = observation('wasm', errors=(ERROR, other), backend='wasm')
     verdict = check_backend_compilation(results, BACKENDS)
-    assert verdict.differences[0].counts == {'js': 2, 'native': 2, 'wasm': 1}
+    assert verdict.differences[0].counts == {'js': 2, 'native': 2, 'wasm': 1, 'jvm': 2}
     for changed in (Diagnostic('program.kt', 2, 2, 'wrong type', 'TYPE_MISMATCH'),
                     Diagnostic('program.kt', 1, 2, 'different type', 'TYPE_MISMATCH'),
                     Diagnostic('different.kt', 1, 2, 'wrong type', 'TYPE_MISMATCH')):
         results['wasm'] = observation('wasm', errors=(changed, other, ERROR), backend='wasm')
         assert check_backend_compilation(results, BACKENDS).findings
+
+
+def test_jvm_only_rejection_and_extra_diagnostic_are_findings():
+    results = {variant_id: observation(variant_id, True, backend=variant_id)
+               for variant_id in BACKENDS}
+    clash = Diagnostic('program.kt', 1, 1, 'platform declaration clash')
+    results['jvm'] = observation('jvm', errors=(clash,), backend='jvm')
+    verdict = check_backend_compilation(results, BACKENDS)
+    assert verdict.complete and not verdict.all_success
+    assert [finding.kind for finding in verdict.findings] == ['status_mismatch']
+    assert verdict.groups['accepted'] == ('js', 'native', 'wasm')
+    assert verdict.groups['rejected'] == ('jvm',)
+
+    results = {variant_id: observation(variant_id, backend=variant_id)
+               for variant_id in BACKENDS}
+    results['jvm'] = observation('jvm', errors=(ERROR, clash), backend='jvm')
+    verdict = check_backend_compilation(results, BACKENDS)
+    assert [finding.kind for finding in verdict.findings] == ['diagnostic_mismatch']
+    assert verdict.differences[0].counts == {'js': 0, 'native': 0, 'wasm': 0, 'jvm': 1}
 
 
 def test_status_mismatch_keeps_distinct_diagnostic_mismatches():

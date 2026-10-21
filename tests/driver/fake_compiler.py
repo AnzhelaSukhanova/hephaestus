@@ -18,6 +18,7 @@ def main() -> int:
         return 0
     mode = os.environ.get('DRIVER_COMPILER_MODE', 'success')
     target = ('native' if '-produce' in arguments
+              else 'jvm' if '-d' in arguments
               else 'wasm' if any('kotlin-stdlib-wasm-' in argument
                                  for argument in arguments) else 'js')
     crash_targets = os.environ.get('DRIVER_CRASH_TARGETS')
@@ -42,6 +43,12 @@ def main() -> int:
             print(f'{source}:1:1: error: controlled rejection')
     if rejected:
         return 1
+    if '-d' in arguments:
+        destination = Path(arguments[arguments.index('-d') + 1])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(destination, 'w') as archive:
+            archive.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\n')
+        return 0
     name: str | None = None
     if '-o' in arguments:
         name = arguments[arguments.index('-o') + 1]

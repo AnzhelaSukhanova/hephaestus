@@ -9,7 +9,7 @@ from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.oracles.compilation import OracleFinding, check_compilation
 
 
-@pytest.mark.parametrize('backend', ['native', 'js', 'wasm'])
+@pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 @pytest.mark.parametrize('symlink_sources', [False, True])
 def test_module_local_diagnostics_match_absolute_source_paths(
         backend, symlink_sources):

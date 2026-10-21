@@ -58,7 +58,7 @@ def test_kotlin_default_settings():
     assert default.settings == KotlinSettings()
 
 
-@pytest.mark.parametrize('backend', ['native', 'js', 'wasm'])
+@pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 @pytest.mark.parametrize('dump_ir', [False, True])
 def test_explicit_kotlin_commands(backend, dump_ir):
     settings = KotlinSettings(backend, dump_ir, '/custom/kotlinc')
@@ -71,6 +71,12 @@ def test_explicit_kotlin_commands(backend, dump_ir):
                    'module', '-nowarn', '-Xklib-ir-inliner=full',
                    '-library', 'direct.klib', '-library', 'indirect.klib',
                    '-friend-modules', 'direct.klib']
+    elif backend == 'jvm':
+        command = ['/custom/kotlinc', 'src',
+                   '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
+                   '-d', 'module.jar', '-nowarn', '-module-name', 'module',
+                   '-classpath', os.pathsep.join(['direct.klib', 'indirect.klib']),
+                   '-Xfriend-paths=direct.klib']
     else:
         stdlib = ('$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-' +
                   ('wasm-' if backend == 'wasm' else '') +
@@ -164,7 +170,7 @@ class TracedKotlin(KotlinCompiler):
         return super().get_compiler_version(settings, scratch_directory)
 
 
-@pytest.mark.parametrize('backend', ['native', 'js', 'wasm'])
+@pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 def test_settings_reach_version_enrichment_reruns_and_correct_only_provider(
         tmp_path, monkeypatch, backend):
     tool = tmp_path / 'kotlinc'
@@ -232,8 +238,9 @@ def test_settings_reach_version_enrichment_reruns_and_correct_only_provider(
     assert provider_attempt.input_name == str(correct)
     assert provider_attempt.settings is settings
     assert provider_attempt.module_name == 'provider'
-    assert provider_attempt.get_dependency_artifact_filename() == 'provider.klib'
-    assert klib == str(tmp_path / 'provider.klib')
+    artifact = 'provider.jar' if backend == 'jvm' else 'provider.klib'
+    assert provider_attempt.get_dependency_artifact_filename() == artifact
+    assert klib == str(tmp_path / artifact)
     assert provider_attempt.dependency_klibs == ['direct.klib', 'indirect.klib']
     assert provider_attempt.friend_klibs == ['direct.klib']
     assert provider_command == provider_attempt.get_compiler_cmd()
@@ -241,7 +248,7 @@ def test_settings_reach_version_enrichment_reruns_and_correct_only_provider(
     assert len({id(attempt) for attempt in TracedKotlin.attempts}) == 4
     commands = [json.loads(line) for line in log.read_text().splitlines()]
     # The version probe ran once, in a scratch directory only JS/Wasm need.
-    scratch = None if backend == 'native' else commands[0]['arguments'][-1]
+    scratch = None if backend in ('native', 'jvm') else commands[0]['arguments'][-1]
     expected_commands = [KotlinCompiler.get_compiler_version(settings, scratch),
                          normal.get_compiler_cmd(),
                          normal.get_error_enrichment_cmds(str(correct))['xprofile-phases'],
