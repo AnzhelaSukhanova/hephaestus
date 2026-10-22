@@ -70,6 +70,8 @@ def test_jvm_only_rejection_and_extra_diagnostic_are_findings():
     assert [finding.kind for finding in verdict.findings] == ['status_mismatch']
     assert verdict.groups['accepted'] == ('js', 'native', 'wasm')
     assert verdict.groups['rejected'] == ('jvm',)
+    assert verdict.findings[0].diagnostics[1:] == (
+        'jvm: program.kt:1:1: platform declaration clash',)
 
     results = {variant_id: observation(variant_id, backend=variant_id)
                for variant_id in BACKENDS}
