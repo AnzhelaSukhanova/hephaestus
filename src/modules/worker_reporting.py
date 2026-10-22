@@ -13,6 +13,7 @@ from src.modules.models import (
 from src.modules.worker import RunOptions
 from src.generators.generator import EscalationLog
 from src.modules.crossmodule import CrossModuleManager
+from src.tools.divergences import write_divergences
 
 
 def initial_stats(options: RunOptions) -> dict[str, Any]:
@@ -156,6 +157,8 @@ class Reporting(TimingMetrics):
         self.stats['inconclusive'] = inconclusive
         self.stats['escalations'] = escalations
         self.stats['time_metrics'] = time_metrics
+        if self.options.oracle == 'backend-comparison':
+            write_divergences(dst_dir, faults)
 
     def update_stats(self, res: OracleResult, batch: int, batch_time: float,
                      escalations: Mapping[str, list[EscalationLog]] | None = None

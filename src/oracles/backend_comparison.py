@@ -93,16 +93,27 @@ def _diagnostic_differences(
     return tuple(tuple(group) for group in diagnostic_groups), tuple(differences)
 
 
-def _diagnostic_message(difference: DiagnosticDifference) -> str:
-    diagnostic = difference.diagnostic
+def _location(diagnostic: Diagnostic) -> str:
     location = diagnostic.source or '<compiler>'
     if diagnostic.line is not None:
         location += ':' + str(diagnostic.line)
     if diagnostic.column is not None:
         location += ':' + str(diagnostic.column)
+    return location
+
+
+def _diagnostic_message(difference: DiagnosticDifference) -> str:
+    diagnostic = difference.diagnostic
     counts = ', '.join(f'{variant_id}={count}'
                        for variant_id, count in sorted(difference.counts.items()))
-    return f'{location}: {diagnostic.message} ({counts})'
+    return f'{_location(diagnostic)}: {diagnostic.message} ({counts})'
+
+
+def _rejection_messages(observations: Mapping[str, VariantObservation],
+                        rejected: Sequence[str]) -> tuple[str, ...]:
+    return tuple(f'{variant_id}: {_location(diagnostic)}: {diagnostic.message}'
+                 for variant_id in rejected
+                 for diagnostic in observations[variant_id].command.errors)
 
 
 def check_backend_compilation(
@@ -114,7 +125,9 @@ def check_backend_compilation(
                                 incomplete_reasons=tuple(reasons))
     if result_groups.get('accepted') and result_groups.get('rejected'):
         findings.append(OracleFinding('status_mismatch', None,
-            ('Backend acceptance differs: ' + repr(result_groups),), tuple(variant_ids)))
+            ('Backend acceptance differs: ' + repr(result_groups),
+             *_rejection_messages(observations, result_groups['rejected'])),
+            tuple(variant_ids)))
     diagnostic_groups, differences = _diagnostic_differences(
         diagnostics, result_groups, variant_ids)
     if differences:
