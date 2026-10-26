@@ -13,6 +13,7 @@ from src.modules.models import (
 from src.modules.worker import RunOptions
 from src.generators.generator import EscalationLog
 from src.modules.crossmodule import CrossModuleManager
+from src.modules.oracle_modes import OracleMode
 from src.tools.divergences import write_divergences
 
 
@@ -80,9 +81,11 @@ class TimingMetrics:
 
 class Reporting(TimingMetrics):
     def __init__(self, options: RunOptions,
-                 manager: CrossModuleManager | None = None) -> None:
+                 manager: CrossModuleManager | None = None, *,
+                 mode: OracleMode) -> None:
         super().__init__(options)
         self.manager = manager
+        self.mode = mode
         self.stats = initial_stats(options)
 
     def print_msg(self) -> None:
@@ -157,7 +160,7 @@ class Reporting(TimingMetrics):
         self.stats['inconclusive'] = inconclusive
         self.stats['escalations'] = escalations
         self.stats['time_metrics'] = time_metrics
-        if self.options.oracle == 'backend-comparison':
+        if self.mode.compares_variants():
             write_divergences(dst_dir, faults)
 
     def update_stats(self, res: OracleResult, batch: int, batch_time: float,
