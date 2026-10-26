@@ -105,7 +105,7 @@ def initialize_worker[S](
     cfg.json_config(inputs.generator_config)
     options = RunOptions.from_namespace(inputs.options)
     utils.random.remove_reserved_words(options.language)
-    # Only backend comparison publishes per-variant bundles.
+    # Only variant comparison publishes per-variant bundles.
     manager = create_manager(
         options, inputs.compiler_version, inputs.compiler_cls,
         settings_by_variant=(inputs.settings_by_variant
