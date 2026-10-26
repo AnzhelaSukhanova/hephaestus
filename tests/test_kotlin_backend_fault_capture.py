@@ -155,13 +155,14 @@ print(json.dumps({"executed": executed, "expected": expected}))
 
 def requirements(oracle, backend):
     from src.compilers.kotlin import (
-        KOTLIN_COMPARISON_VARIANTS, KotlinCompiler, KotlinSettings, _compiler_executable,
+        KotlinCompiler, KotlinSettings, _compiler_executable,
     )
+    from src.modules.oracle_modes import BACKEND_COMPARISON_VARIANTS
 
     if oracle == "compilation":
         settings = [KotlinSettings(backend=backend)]
     else:
-        settings = list(KOTLIN_COMPARISON_VARIANTS.values())
+        settings = list(BACKEND_COMPARISON_VARIANTS.values())
     paths = []
     for item in settings:
         paths.append(_compiler_executable(item))

@@ -10,6 +10,7 @@ from src.ir import ast, kotlin_types as kt
 from src.ir.context import Context
 from src.modules.crossmodule import CrossModuleManager, ManifestDiff, VariantPublication
 from src.modules.models import OracleResult
+from src.modules.oracle_modes import CompilationMode
 from src.modules.worker_reporting import Reporting
 from src.utils import RandomUtils
 from tests.test_outcome_consumers import reporting_options
@@ -417,7 +418,7 @@ def test_run_statistics_hold_no_crossmodule_bookkeeping(tmp_path, monkeypatch):
     lab = tmp_path / "lab"
     _write_ledger(lab, {"3": {"direct": None, "closure": []}})
     manager = _manager(lab)
-    reporting = Reporting(reporting_options(lab), manager)
+    reporting = Reporting(reporting_options(lab), manager, mode=CompilationMode())
     assert not CROSSMODULE_STATS_FIELDS & reporting.stats.keys()
     diff: ManifestDiff = {
         "manifest_depends": ["ghost"], "closure": ["d3"], "unexpected": ["ghost"]}

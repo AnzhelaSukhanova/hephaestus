@@ -8,7 +8,7 @@ import pytest
 
 from hephaestus import Fuzzer, configure_generator
 from src.args import parse_args, validate_args
-from src.compilers.kotlin import KOTLIN_COMPARISON_VARIANTS, KotlinCompiler, KotlinSettings
+from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.compilers.results import (
     CommandObservation, ParsedDiagnostics, ProcessResult, VariantObservation,
 )
@@ -17,7 +17,8 @@ from src.modules.compilation import ORDINARY_VARIANT
 from src.modules.worker import RunOptions, initialize_worker
 from src.modules.scheduler import _create_worker_scheduler
 from src.modules.oracle_modes import (
-    BackendComparisonMode, CompilationMode, create_oracle_mode,
+    BACKEND_COMPARISON_VARIANTS, BackendComparisonMode, CompilationMode, InliningComparisonMode,
+    create_oracle_mode,
 )
 
 
@@ -52,7 +53,7 @@ def test_defaults_internal_paths_and_crossmodule_configuration(tmp_path, monkeyp
     assert parse_args([]).oracle == 'compilation'
     # The selection layer chooses the preset; Compilation owns the selected mapping.
     assert application(tmp_path).compilation.settings_by_variant == (
-        KOTLIN_COMPARISON_VARIANTS)
+        BACKEND_COMPARISON_VARIANTS)
     ordinary = Fuzzer(parse_args(['-b', str(tmp_path), '-n', 'ordinary']))
     assert ordinary.compilation.settings_by_variant == {
         ORDINARY_VARIANT: ordinary.compilation.settings}
@@ -159,7 +160,8 @@ def worker_snapshot(inputs, queue):
     queue.put((dict(resources.settings_by_variant), dict(resources.versions_by_variant),
                dict(compilation.settings_by_variant), dict(compilation.versions_by_variant),
                dict(resources.manager.settings_by_variant),
-               dict(resources.manager.versions_by_variant), resources.mode.name))
+               dict(resources.manager.versions_by_variant), resources.mode.name,
+               resources.scheduler.reporting.mode is resources.mode))
 
 
 @pytest.mark.parametrize('method', [method for method in ('spawn', 'fork')
@@ -179,13 +181,14 @@ def test_worker_settings_transport(tmp_path, method):
     process = context.Process(target=worker_snapshot, args=(inputs, queue))
     process.start()
     (settings, versions, compilation_settings, compilation_versions,
-     manager_settings, manager_versions, mode_name) = queue.get(timeout=20)
+     manager_settings, manager_versions, mode_name, reporting_mode_shared) = queue.get(timeout=20)
     process.join(timeout=20)
     assert process.exitcode == 0
     assert settings == compilation_settings == manager_settings == selected
     assert versions == compilation_versions == manager_versions == {
         variant_id: variant_id + ' full version' for variant_id in selected}
     assert mode_name == app.mode.name
+    assert reporting_mode_shared
     queue.close()
 
 
@@ -217,9 +220,9 @@ def test_preflight_reuses_compilation_construction(tmp_path, monkeypatch):
     assert all(isinstance(request.compiler, KotlinCompiler)
                and request.compiler.klib_output for request in requests)
     assert [request.compiler.settings for request in requests] == list(
-        KOTLIN_COMPARISON_VARIANTS.values())
+        BACKEND_COMPARISON_VARIANTS.values())
     assert app.compilation.versions_by_variant == dict.fromkeys(
-        KOTLIN_COMPARISON_VARIANTS, 'Kotlin compiler version 2.4.255-SNAPSHOT')
+        BACKEND_COMPARISON_VARIANTS, 'Kotlin compiler version 2.4.255-SNAPSHOT')
 
     # The JS and Wasm launchers report another version than Native.
     monkeypatch.setattr(app.compilation, 'run_command', lambda arguments, get_stdout=True,
@@ -240,6 +243,8 @@ def test_preflight_reuses_compilation_construction(tmp_path, monkeypatch):
     ([], CompilationMode, 'compilation', True, False),
     (['--oracle', 'backend-comparison'], BackendComparisonMode,
      'backend-comparison', True, True),
+    (['--oracle', 'inlining-comparison'], InliningComparisonMode,
+     'inlining-comparison', True, True),
 ])
 def test_oracle_mode_selection_and_pickling(
         arguments, mode_type, name, counts, compares):

@@ -14,7 +14,7 @@ import pytest
 from src.compilers.base import BaseCompiler
 from src.compilers.groovy import GroovyCompiler
 from src.compilers.java import JavaCompiler
-from src.compilers.kotlin import KotlinCompiler, KotlinSettings
+from src.compilers.kotlin import INLINING_MODES, KotlinCompiler, KotlinSettings
 from src.compilers.scala import ScalaCompiler
 from src.args import parse_args
 from src.modules.artifacts import Artifacts
@@ -56,19 +56,21 @@ def test_kotlin_default_settings():
     assert KotlinCompiler.get_compiler_version(KotlinSettings()) == [
         command[0], '-version']
     assert default.settings == KotlinSettings()
+    assert KotlinSettings('wasm', True, '/custom/kotlinc').inlining_mode == 'full'
 
 
 @pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 @pytest.mark.parametrize('dump_ir', [False, True])
-def test_explicit_kotlin_commands(backend, dump_ir):
-    settings = KotlinSettings(backend, dump_ir, '/custom/kotlinc')
+@pytest.mark.parametrize('inlining_mode', INLINING_MODES)
+def test_explicit_kotlin_commands(backend, dump_ir, inlining_mode):
+    settings = KotlinSettings(backend, dump_ir, '/custom/kotlinc', inlining_mode)
     compiler = KotlinCompiler('src', ['filter'], ['direct.klib', 'indirect.klib'],
                               ['direct.klib'], 'module', settings=settings)
     if backend == 'native':
         command = ['/custom/kotlinc', 'src',
                    '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
                    '-produce', 'library', '-o',
-                   'module', '-nowarn', '-Xklib-ir-inliner=full',
+                   'module', '-nowarn', '-Xklib-ir-inliner=' + inlining_mode,
                    '-library', 'direct.klib', '-library', 'indirect.klib',
                    '-friend-modules', 'direct.klib']
     elif backend == 'jvm':
@@ -87,7 +89,7 @@ def test_explicit_kotlin_commands(backend, dump_ir):
                    '-ir-output-dir', '.', '-ir-output-name', 'module',
                    '-libraries', os.pathsep.join([
                        stdlib, 'direct.klib', 'indirect.klib']),
-                   '-nowarn', '-Xklib-ir-inliner=full',
+                   '-nowarn', '-Xklib-ir-inliner=' + inlining_mode,
                    '-Xfriend-modules=direct.klib']
     dump = (['-Xphases-to-dump=' + compiler.IR_MODIFYING_INLINER_PHASES,
              '-Xdump-directory=src/ir'] if dump_ir else [])
@@ -280,6 +282,7 @@ kotlin: BaseCompiler[KotlinSettings] = attempt(KotlinCompiler, KotlinSettings())
 java: BaseCompiler[None] = attempt(JavaCompiler, None)
 KotlinCompiler.get_compiler_version(KotlinSettings())
 JavaCompiler.get_compiler_version(None)
+KotlinSettings('native', inlining_mode='intra-module')
 
 def wiring(options: RunOptions, artifacts: Artifacts) -> None:
     kotlin: Compilation[KotlinSettings] = Compilation(
@@ -301,6 +304,7 @@ attempt(KotlinCompiler, None)  # mismatch
 attempt(JavaCompiler, KotlinSettings())  # mismatch
 KotlinCompiler('src', settings=None)  # mismatch
 JavaCompiler.get_compiler_version(KotlinSettings())  # mismatch
+KotlinSettings('native', inlining_mode='crossmodule')  # mismatch
 ''')
     result = subprocess.run(
         [sys.executable, '-m', 'pyright', '--outputjson', str(source)],

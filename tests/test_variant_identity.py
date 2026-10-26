@@ -150,8 +150,8 @@ def test_missing_shell_compiler_in_backend_comparison_is_inconclusive(
 
     assert result.faults == {}
     assert set(result.inconclusive) == {1}
-    assert result.inconclusive[1]['inconclusive_reason'] == (
-        'backend_comparison_incomplete')
+    assert result.inconclusive[1]['inconclusive_reason'] == 'comparison_incomplete'
+    assert result.inconclusive[1]['oracle'] == 'backend-comparison'
     retained = Path(app.options.test_directory) / '1' / 'variants' / 'web' / 'result.json'
     evidence = json.loads(retained.read_text())
     assert evidence['status'] is False
@@ -182,6 +182,7 @@ def test_crossmodule_artifacts_and_compilation_use_variant_ids_and_backends(
         assert metadata['settings'] == {
             'backend': backend, 'dump_ir': False,
             'executable': settings[variant_id].executable,
+            'inlining_mode': 'full',
         }
         retained = Path(app.options.test_directory) / '1' / 'variants' / variant_id
         result = json.loads((retained / 'result.json').read_text())

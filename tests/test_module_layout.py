@@ -44,11 +44,13 @@ def _patch_parent_only_reporting(stack: ExitStack, reporter: Reporting) -> list:
 
 
 def _worker_reporting_observation(dirname: str) -> tuple:
-    scheduler = get_worker_resources().scheduler
+    resources = get_worker_resources()
+    scheduler = resources.scheduler
     assert isinstance(scheduler, Scheduler)
     reporter = scheduler.reporting
     assert type(reporter) is Reporting
     assert scheduler.evaluation.reporting is reporter
+    assert reporter.mode is resources.mode
     stats = deepcopy(reporter.stats)
     with ExitStack() as stack:
         parent_methods = [stack.enter_context(patch.object(
@@ -80,6 +82,7 @@ def _worker_observation(dirname: str) -> tuple:
     reporter = scheduler.reporting
     assert type(reporter) is Reporting
     assert scheduler.evaluation.reporting is reporter
+    assert reporter.mode is resources.mode
     compilation = scheduler.evaluation.compilation
     assert compilation.settings is resources.compiler_settings
     assert scheduler.compiler_settings is resources.compiler_settings
@@ -309,6 +312,7 @@ def test_scheduler_worker_tasks_leave_reporting_to_parent(
     assert not (report_dir / 'stats.json').exists()
     assert not (report_dir / 'faults.json').exists()
     reporting.update_stats(oracle_result, 1, 0.0)
+    assert not (report_dir / 'divergences.md').exists()
     totals = {'passed': int(mode == 'success'), 'failed': int(mode == 'reject'),
               'inconclusive': 0}
     assert reporting.stats['totals'] == totals

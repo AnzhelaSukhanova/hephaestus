@@ -18,7 +18,9 @@ from src.modules.compilation import ProviderCompilationError
 from src.modules.crossmodule import PublicationError
 from src.modules.evaluation import Evaluation
 from src.modules.models import OracleResult, ProgramRes
-from src.modules.oracle_modes import BackendComparisonMode, CompilationMode
+from src.modules.oracle_modes import (
+    BackendComparisonMode, CompilationMode, InliningComparisonMode,
+)
 from src.modules.scheduler import Scheduler
 from src.modules.worker_reporting import Reporting
 
@@ -141,10 +143,11 @@ def make_evaluation(run_dir, *, language='kotlin', returncode=0, output='',
         language, returncode=returncode, output=output,
         launch_failure=launch_failure, crash_message=crash_message,
         exception=exception)
-    reporting = Reporting(options)
+    mode = mode or CompilationMode()
+    reporting = Reporting(options, mode=mode)
     coverage = CoverageStub()
     evaluation = Evaluation(options, compilation, artifacts, coverage, reporting,
-                            ManagerStub(), mode=mode or CompilationMode())
+                            ManagerStub(), mode=mode)
     return evaluation, compilation, artifacts, coverage, reporting
 
 
@@ -240,7 +243,7 @@ def test_shell_missing_compiler_in_original_oracle_is_inconclusive(tmp_path):
     compilation = Compilation(
         options, artifacts, {'kotlin': KotlinCompiler},
         settings=KotlinSettings(executable=str(tmp_path / 'missing-kotlinc')))
-    reporting = Reporting(options)
+    reporting = Reporting(options, mode=CompilationMode())
     evaluation = Evaluation(
         options, compilation, artifacts, CoverageStub(), reporting, ManagerStub(),
         mode=CompilationMode())
@@ -481,19 +484,24 @@ def test_dry_run_counts_only_generation_failures_as_inconclusive(tmp_path):
     assert outcomes.faults == {}
 
 
-@pytest.mark.parametrize('mode', [CompilationMode(), BackendComparisonMode()])
+@pytest.mark.parametrize('mode', [CompilationMode(), BackendComparisonMode(),
+                                  InliningComparisonMode()])
 def test_every_mode_writes_zero_total_and_empty_inconclusive_report(tmp_path,
                                                                    monkeypatch,
                                                                    mode):
     monkeypatch.setattr(cfg.prob, 'crossmodule_probability', 0)
     options = options_for(tmp_path)
     options.oracle = mode.name
-    reporting = Reporting(options)
+    reporting = Reporting(options, mode=mode)
 
     reporting.update_stats(OracleResult(), batch=1, batch_time=0)
 
     assert reporting.stats['totals']['inconclusive'] == 0
     assert (tmp_path / 'inconclusive.json').read_text() == '{}'
+    divergences = tmp_path / 'divergences.md'
+    assert divergences.exists() is mode.compares_variants()
+    if mode.compares_variants():
+        assert '0 divergent program(s)' in divergences.read_text()
 
 
 class GenerationStub:
@@ -564,7 +572,7 @@ def test_scheduler_accounts_mixed_generation_batch_in_serial_and_parallel(
     artifacts = Artifacts(options)
     generation = GenerationStub(options, {1})
     compilation = FakeCompilation('java')
-    reporting = Reporting(options)
+    reporting = Reporting(options, mode=CompilationMode())
     reporting.logging = lambda version: None
     coverage = CoverageStub()
     evaluation = Evaluation(options, compilation, artifacts, coverage, reporting,
@@ -596,7 +604,7 @@ def test_evaluation_exceptions_are_inconclusive_in_both_scheduler_paths(
     artifacts = Artifacts(options)
     compilation = FakeCompilation(
         'java', exception=RuntimeError('evaluation task failed'))
-    reporting = Reporting(options)
+    reporting = Reporting(options, mode=CompilationMode())
     reporting.logging = lambda version: None
     evaluation = Evaluation(options, compilation, artifacts, CoverageStub(),
                             reporting, ManagerStub())
@@ -624,7 +632,7 @@ def test_keyboard_interrupt_does_not_record_a_completed_batch(
     generation = GenerationStub(options, set())
     artifacts = Artifacts(options)
     compilation = FakeCompilation('java', exception=KeyboardInterrupt())
-    reporting = Reporting(options)
+    reporting = Reporting(options, mode=CompilationMode())
     reporting.logging = lambda version: None
     evaluation = Evaluation(options, compilation, artifacts, CoverageStub(),
                             reporting, ManagerStub())

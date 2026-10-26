@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 from src.modules.models import OracleResult
+from src.modules.oracle_modes import CompilationMode
 from src.modules.worker_reporting import Reporting
 from src.tools.graph import graph_n_common, n_common_points
 from src.tools.ir_coverage import coverage_rows
@@ -140,7 +141,7 @@ def test_reporting_tracks_unexpected_inconclusive_in_compilation_mode(
     from src.generators.config import cfg
 
     monkeypatch.setattr(cfg.prob, "crossmodule_probability", 0)
-    reporting = Reporting(reporting_options(tmp_path))
+    reporting = Reporting(reporting_options(tmp_path), mode=CompilationMode())
     reporting.update_stats(
         OracleResult(
             faults={2: {"oracle": "compilation"}},
@@ -163,9 +164,10 @@ def test_compilation_mode_healthy_accounting_writes_empty_inconclusive_report(
     from src.generators.config import cfg
 
     monkeypatch.setattr(cfg.prob, "crossmodule_probability", 0)
-    reporting = Reporting(reporting_options(tmp_path))
+    reporting = Reporting(reporting_options(tmp_path), mode=CompilationMode())
     reporting.update_stats(OracleResult(), batch=1, batch_time=0)
 
     assert reporting.stats["totals"] == {
         "passed": 1, "failed": 0, "inconclusive": 0}
     assert json.loads((tmp_path / "inconclusive.json").read_text()) == {}
+    assert not (tmp_path / "divergences.md").exists()

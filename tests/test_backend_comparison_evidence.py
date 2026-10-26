@@ -124,6 +124,7 @@ def test_fault_evidence_includes_all_attempts_even_without_metrics(
                      for backend in app.compilation.settings_by_variant},
     }
     assert app.reporting.stats['totals'] == {'passed': 0, 'failed': 1, 'inconclusive': 0}
+    assert '## 1' in (Path(app.options.test_directory) / 'divergences.md').read_text()
 
 
 def test_inconclusive_is_not_counted_as_pass_and_references_published_dependencies(

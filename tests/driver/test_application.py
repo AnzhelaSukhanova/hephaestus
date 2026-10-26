@@ -79,6 +79,7 @@ def test_application_wires_independent_options_and_components(tmp_path: Path) ->
     assert application.scheduler.generation is application.generation
     assert application.scheduler.evaluation is application.evaluation
     assert application.scheduler.reporting is application.reporting
+    assert application.reporting.mode is application.mode is application.evaluation.mode
     assert application.reporting.stats is not other.reporting.stats
     assert list(tmp_path.iterdir()) == []
 

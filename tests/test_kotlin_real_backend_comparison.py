@@ -5,8 +5,9 @@ import zipfile
 
 import pytest
 
-from src.compilers.kotlin import KOTLIN_COMPARISON_VARIANTS, KotlinCompiler
+from src.compilers.kotlin import KotlinCompiler
 from src.compilers.results import CompilationRequest
+from src.modules.oracle_modes import BACKEND_COMPARISON_VARIANTS
 from src.oracles.backend_comparison import check_backend_compilation
 from tests.test_backend_comparison import application
 
@@ -17,7 +18,7 @@ def real_kotlin(tmp_path_factory):
         pytest.skip('set HEPHAESTUS_TEST_REAL_KOTLIN=1 for installed Kotlin distributions')
     from src.compilers.kotlin import _compiler_executable
     missing = []
-    for settings in KOTLIN_COMPARISON_VARIANTS.values():
+    for settings in BACKEND_COMPARISON_VARIANTS.values():
         executable = os.path.expandvars(_compiler_executable(settings))
         library = os.path.expandvars(KotlinCompiler('', settings=settings).stdlib_path())
         for path in (executable, library):

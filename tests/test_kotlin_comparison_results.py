@@ -7,9 +7,10 @@ import pytest
 
 from src.compilers.base import BaseCompiler
 from src.compilers.kotlin import (
-    KOTLIN_COMPARISON_VARIANTS, KotlinCompiler, KotlinSettings, _compiler_executable,
+    KotlinCompiler, KotlinSettings, _compiler_executable,
 )
 from src.compilers.results import CompilationRequest, Diagnostic
+from src.modules.oracle_modes import BACKEND_COMPARISON_VARIANTS
 from tests.test_compilation_variants import components
 
 
@@ -87,17 +88,17 @@ def test_version_probe_preparation(tmp_path, backend):
 
 
 def test_comparison_preset_is_plain_immutable_settings():
-    assert tuple(KOTLIN_COMPARISON_VARIANTS) == ('js', 'native', 'wasm', 'jvm')
+    assert tuple(BACKEND_COMPARISON_VARIANTS) == ('js', 'native', 'wasm', 'jvm')
     assert all(settings.backend == variant_id
-               for variant_id, settings in KOTLIN_COMPARISON_VARIANTS.items())
+               for variant_id, settings in BACKEND_COMPARISON_VARIANTS.items())
     wasm = KotlinSettings('wasm')
-    assert KOTLIN_COMPARISON_VARIANTS['wasm'] == wasm
+    assert BACKEND_COMPARISON_VARIANTS['wasm'] == wasm
     assert _compiler_executable(wasm).endswith('/kotlinc-wasm')
     override = KotlinSettings('wasm', executable='/custom/kotlinc')
     assert _compiler_executable(override) == '/custom/kotlinc'
     assert KotlinCompiler('source', settings=override).get_compiler_cmd()[0] == '/custom/kotlinc'
     with pytest.raises(TypeError):
-        KOTLIN_COMPARISON_VARIANTS['jvm'] = KotlinSettings()
+        BACKEND_COMPARISON_VARIANTS['jvm'] = KotlinSettings()
 
 
 @pytest.mark.parametrize('prefix', ['', 'e: '])
