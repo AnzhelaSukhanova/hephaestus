@@ -4,11 +4,10 @@ import re
 import os
 import shutil
 import zipfile
-from collections.abc import Collection, Mapping
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 import textwrap
-from types import MappingProxyType
 from typing import Literal
 from urllib.parse import unquote
 
@@ -17,6 +16,7 @@ from src.compilers.results import Diagnostic, ParsedDiagnostics
 
 
 type KotlinBackend = Literal['js', 'native', 'wasm', 'jvm']
+type InliningMode = Literal['disabled', 'intra-module', 'full', 'default']  # -Xklib-ir-inliner on KLIB backends; 'default' defers to the language version; JVM ignores it.
 
 
 @dataclass(frozen=True)
@@ -24,9 +24,11 @@ class KotlinSettings:
     backend: KotlinBackend = 'native'
     dump_ir: bool = False
     executable: str | None = None
+    inlining_mode: InliningMode = 'full'
 
 
 BACKENDS: tuple[KotlinBackend, ...] = ('js', 'native', 'wasm', 'jvm')
+INLINING_MODES: tuple[InliningMode, ...] = ('disabled', 'intra-module', 'full', 'default')
 
 
 def _compiler_executable(settings: KotlinSettings) -> str:
@@ -35,14 +37,6 @@ def _compiler_executable(settings: KotlinSettings) -> str:
     distribution = ('kotlin-native/dist' if settings.backend == 'native'
                     else 'dist/kotlinc')
     return f'$HOME/kotlin/{distribution}/bin/kotlinc-{settings.backend}'
-
-
-KOTLIN_COMPARISON_VARIANTS: Mapping[str, KotlinSettings] = MappingProxyType({
-    'js': KotlinSettings('js'),
-    'native': KotlinSettings('native'),
-    'wasm': KotlinSettings('wasm'),
-    'jvm': KotlinSettings('jvm'),
-})
 
 
 class KotlinCompiler(BaseCompiler[KotlinSettings]):
@@ -127,7 +121,7 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
                 output_name = os.path.join(self.output_directory, self.module_name)
             command.extend(['-produce', 'library',
                             '-o', output_name,
-                            '-nowarn', '-Xklib-ir-inliner=full'])
+                            '-nowarn', '-Xklib-ir-inliner=' + self.settings.inlining_mode])
             command.extend(self._native_dependency_flags())
             return command
         elif self.settings.backend == 'jvm':
@@ -155,7 +149,7 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
                 command.extend(['-ir-output-dir', input_name,
                                 '-ir-output-name', 'src'])
             command.extend(['-libraries', self._libraries_value(),
-                            '-nowarn', '-Xklib-ir-inliner=full'])
+                            '-nowarn', '-Xklib-ir-inliner=' + self.settings.inlining_mode])
             command.extend(self._js_dependency_flags())
             return command
 
