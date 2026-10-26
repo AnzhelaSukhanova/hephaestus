@@ -244,9 +244,25 @@ class BackendComparisonMode(VariantComparisonMode):
             'wasm': KotlinSettings('wasm'),
             'jvm': KotlinSettings('jvm'),
         })
+
+
+@dataclass(frozen=True)
+class InliningComparisonMode(VariantComparisonMode):
+    name: str = 'inlining-comparison'
+    backend: KotlinBackend = 'native'
+
+    def variant_settings(self) -> Mapping[str, KotlinSettings]:
+        return MappingProxyType({
+            'disabled': KotlinSettings(self.backend, inlining_mode='disabled'),
+            'crossmodule': KotlinSettings(self.backend, inlining_mode='full'),
+        })
+
+
 def create_oracle_mode(options: RunOptions) -> OracleMode:
     if options.oracle == 'compilation':
         return CompilationMode()
     if options.oracle == 'backend-comparison':
         return BackendComparisonMode()
+    if options.oracle == 'inlining-comparison':
+        return InliningComparisonMode(backend=options.backend)
     raise ValueError(f'Unsupported oracle mode: {options.oracle}')
