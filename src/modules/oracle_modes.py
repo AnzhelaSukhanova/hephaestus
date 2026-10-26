@@ -7,9 +7,11 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol
 
 from src import utils
+from src.compilers.kotlin import KotlinBackend, KotlinSettings
 from src.compilers.results import CompilationRequest
 from src.modules.crossmodule import PublicationError
 from src.modules.models import (
@@ -20,7 +22,6 @@ from src.oracles.backend_comparison import check_backend_compilation
 
 
 if TYPE_CHECKING:
-    from src.compilers.kotlin import KotlinSettings
     from src.modules.compilation import Compilation
     from src.modules.evaluation import Evaluation
     from src.modules.worker import RunOptions
@@ -37,6 +38,8 @@ class OracleMode(Protocol):
 
     def compares_variants(self) -> bool: ...
 
+    def variant_settings(self) -> Mapping[str, KotlinSettings] | None: ...
+
 
 @dataclass(frozen=True)
 class CompilationMode:
@@ -52,9 +55,16 @@ class CompilationMode:
     def compares_variants(self) -> bool:
         return False
 
-@dataclass(frozen=True)
-class BackendComparisonMode:
-    name: str = 'backend-comparison'
+    def variant_settings(self) -> None:
+        return None
+
+
+class VariantComparisonMode:
+    """Compiles each program once per variant and compares the observations."""
+    name: str
+
+    def variant_settings(self) -> Mapping[str, KotlinSettings]:
+        raise NotImplementedError
 
     def evaluate(self, evaluation: Evaluation, dirname: str,
                  oracles: Mapping[int, ProgramRes]) -> OracleResult:
@@ -206,12 +216,9 @@ class BackendComparisonMode:
                 message for finding in comparison.findings for message in finding.diagnostics)
             faults[pid] = proc_res.stats
         elif not comparison.complete:
-            reason = ('backend_comparison_incomplete'
-                      if comparison.incomplete_reasons else 'backend_comparison_unresolved')
             inconclusive[pid] = mark_inconclusive(
-                proc_res.stats, self.name, reason,
-                '; '.join(comparison.incomplete_reasons) or
-                'Backend comparison could not establish a verdict')
+                proc_res.stats, self.name, 'comparison_incomplete',
+                '; '.join(comparison.incomplete_reasons))
         record = faults.get(pid) or inconclusive.get(pid)
         if faults or inconclusive or evaluation.options.keep_everything:
             with evaluation._secondary_operation(pid, 'preserve_comparison', record):
@@ -226,6 +233,17 @@ class BackendComparisonMode:
         return OracleResult(faults, elapsed, timings, publications, inconclusive)
 
 
+@dataclass(frozen=True)
+class BackendComparisonMode(VariantComparisonMode):
+    name: str = 'backend-comparison'
+
+    def variant_settings(self) -> Mapping[str, KotlinSettings]:
+        return MappingProxyType({
+            'js': KotlinSettings('js'),
+            'native': KotlinSettings('native'),
+            'wasm': KotlinSettings('wasm'),
+            'jvm': KotlinSettings('jvm'),
+        })
 def create_oracle_mode(options: RunOptions) -> OracleMode:
     if options.oracle == 'compilation':
         return CompilationMode()
