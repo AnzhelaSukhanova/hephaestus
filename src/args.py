@@ -127,8 +127,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '--oracle', default='compilation',
-        choices=['compilation', 'backend-comparison'],
-        help='Compilation expectations or Kotlin JS/Native/Wasm (KLIB) and JVM (linked JAR) agreement')
+        choices=['compilation', 'backend-comparison', 'inlining-comparison'],
+        help=('Compilation expectations, Kotlin JS/Native/Wasm (KLIB) and JVM (linked JAR) agreement, '
+              'or agreement of one KLIB backend with the IR inliner disabled and cross-module'))
     parser.add_argument(
         "--max-type-params",
         type=int,
@@ -300,14 +301,16 @@ def configure_generator(options: argparse.Namespace) -> None:
 
 def validate_args(args):
     # CHECK ARGUMENTS
-    if args.oracle == 'backend-comparison':
+    if args.oracle in ('backend-comparison', 'inlining-comparison'):
         if args.language != 'kotlin':
-            sys.exit('Error: backend-comparison requires Kotlin')
+            sys.exit(f'Error: {args.oracle} requires Kotlin')
         if args.batch != 1:
-            sys.exit('Error: backend-comparison requires --batch 1')
+            sys.exit(f'Error: {args.oracle} requires --batch 1')
         if args.rerun or args.dump_ir or args.jacoco_lowerings or args.jacoco_always:
             #TODO: Live JaCoCo might be helpful, add in the future if all works out
-            sys.exit('Error: backend-comparison does not support --rerun, --dump-ir or live JaCoCo')
+            sys.exit(f'Error: {args.oracle} does not support --rerun, --dump-ir or live JaCoCo')
+        if args.oracle == 'inlining-comparison' and args.backend == 'jvm':
+            sys.exit('Error: inlining-comparison requires --backend js, native or wasm')
     if args.backend == 'jvm' and (args.dump_ir or args.jacoco_lowerings or args.jacoco_always):
         sys.exit('Error: --backend jvm does not support --dump-ir or live JaCoCo')
 
