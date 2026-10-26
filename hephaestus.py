@@ -5,7 +5,7 @@ import os
 
 from src.args import parse_args, configure_generator, validate_args, pre_process_args
 from src.compilers.base import BaseCompiler
-from src.compilers.kotlin import KOTLIN_COMPARISON_VARIANTS, KotlinCompiler, KotlinSettings
+from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.modules.artifacts import Artifacts
 from src.modules.compilation import Compilation, COMPILERS, ORDINARY_VARIANT
 from src.modules.coverage import LiveCoverage
@@ -35,10 +35,9 @@ class Fuzzer:
             if issubclass(compiler_cls, KotlinCompiler) else None)
         self.compilation = Compilation(
             self.options, self.artifacts, compiler_types, settings=settings,
-            settings_by_variant=(KOTLIN_COMPARISON_VARIANTS
-                                 if self.mode.compares_variants() else None))
+            settings_by_variant=self.mode.variant_settings())
         self.coverage = LiveCoverage(self.options, self.compilation)
-        self.reporting = Reporting(self.options)
+        self.reporting = Reporting(self.options, mode=self.mode)
         self.evaluation = Evaluation(
             self.options, self.compilation, self.artifacts,
             self.coverage, self.reporting, mode=self.mode)
@@ -68,7 +67,7 @@ class Fuzzer:
             try:
                 self.mode.preflight(self.compilation)
             except ValueError as exc:
-                raise SystemExit('Error: Kotlin backend comparison preflight failed: '
+                raise SystemExit(f'Error: Kotlin {self.mode.name} preflight failed: '
                                  + str(exc)) from exc
             compiler_version = '\n'.join(
                 f'{variant_id}: {version}'
