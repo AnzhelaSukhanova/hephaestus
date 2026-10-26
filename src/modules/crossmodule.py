@@ -75,7 +75,7 @@ class CrossModuleManager:
         self.read_manifest_depends: Callable[[str], set[str] | None] = read_manifest_depends
         self.random: RandomUtils = random_source
         self.load_program: Callable[[str], ast.Program | None] = load_program
-        # Backend comparison publishes one KLIB per configured variant_id, built
+        # Variant comparison publishes one KLIB per configured variant_id, built
         # with these settings by the compiler versions recorded at startup.
         self.settings_by_variant: Mapping[str, KotlinSettings] | None = (
             dict(settings_by_variant) if settings_by_variant is not None else None)
