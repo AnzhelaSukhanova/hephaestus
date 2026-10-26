@@ -307,7 +307,7 @@ def _create_worker_scheduler[S](resources: WorkerResources[S]) -> Scheduler[S]:
         settings_by_variant=resources.settings_by_variant,
         versions_by_variant=resources.versions_by_variant)
     coverage = LiveCoverage(options, compilation)
-    timing = Reporting(options, resources.manager)
+    timing = Reporting(options, resources.manager, mode=resources.mode)
     evaluation = Evaluation(
         options, compilation, artifacts, coverage, timing, resources.manager,
         mode=resources.mode)
