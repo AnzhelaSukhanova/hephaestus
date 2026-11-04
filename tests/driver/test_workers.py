@@ -21,7 +21,7 @@ def test_worker_equivalence(method: str, mode: str, dry_run: bool,
         source = root / 'input.bin'
         replay(source)
         arguments = ['--replay', str(source), '--iterations', '3', '--keep-successful',
-                     '--disable-metrics']
+                     '--keep-all', '--disable-metrics']
         if dry_run:
             arguments.append('--dry-run')
         sequential = root / 'sequential'
@@ -33,4 +33,5 @@ def test_worker_equivalence(method: str, mode: str, dry_run: bool,
         second = json.loads((parallel / 'snapshot.json').read_text())
         assert first == second
         failed = 0 if dry_run or mode == 'success' else 3
-        assert first['totals'] == {'passed': 3 - failed, 'failed': failed}
+        assert first['totals'] == {'passed': 3 - failed, 'failed': failed, 'inconclusive': 0}
+        assert first['inconclusive'] == {}

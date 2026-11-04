@@ -1,18 +1,36 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hephaestus import Fuzzer
 
 
 ROOT = Path(__file__).resolve().parents[2]
 TIMEOUT = 60
+_DRIVER: Fuzzer | None = None
 
 
-def load_driver():
-    import hephaestus
-    return hephaestus
+def load_driver() -> Fuzzer:
+    """Return the scenario's application, constructed once per process.
+
+    The runner establishes ``sys.argv`` first; construction follows
+    ``hephaestus.main`` (parse, configure the generator, construct) without
+    starting the run.
+    """
+    global _DRIVER
+    if _DRIVER is None:
+        import hephaestus
+        options = hephaestus.parse_args(sys.argv[1:])
+        hephaestus.configure_generator(options)
+        _DRIVER = hephaestus.Fuzzer(options)
+    return _DRIVER
 
 
 def launch(scenario: str, workspace: Path,

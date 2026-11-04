@@ -7,9 +7,8 @@ import pytest
 
 from src.compilers.kotlin import KotlinCompiler
 from src.compilers.results import CompilationRequest
-from src.modules.oracle_modes import BACKEND_COMPARISON_VARIANTS
 from src.oracles.backend_comparison import check_backend_compilation
-from tests.test_backend_comparison import application
+from tests.test_backend_comparison import BACKEND_COMPARISON_VARIANTS, application
 
 
 @pytest.fixture(scope='module')

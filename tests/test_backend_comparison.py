@@ -17,9 +17,11 @@ from src.modules.compilation import ORDINARY_VARIANT
 from src.modules.worker import RunOptions, initialize_worker
 from src.modules.scheduler import _create_worker_scheduler
 from src.modules.oracle_modes import (
-    BACKEND_COMPARISON_VARIANTS, BackendComparisonMode, CompilationMode, InliningComparisonMode,
-    create_oracle_mode,
+    BackendComparisonMode, CompilationMode, InliningComparisonMode, create_oracle_mode,
 )
+
+
+BACKEND_COMPARISON_VARIANTS = BackendComparisonMode().variant_settings()
 
 
 def application(tmp_path, extra=()):
@@ -58,7 +60,7 @@ def test_defaults_internal_paths_and_crossmodule_configuration(tmp_path, monkeyp
     assert ordinary.compilation.settings_by_variant == {
         ORDINARY_VARIANT: ordinary.compilation.settings}
     monkeypatch.setattr(cfg.prob, 'crossmodule_probability', 0.7)
-    with pytest.raises(SystemExit, match='requires --keep-all'):
+    with pytest.raises(SystemExit, match='requires --keep-successful or --keep-all'):
         validate_args(application(tmp_path).options)
     app = application(tmp_path, ['--keep-all'])
     validate_args(app.options)

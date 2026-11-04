@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from src import utils
+from src.compilers.java import JavaCompiler
 from src.translators.kotlin import KotlinTranslator
 from tests.driver.contracts import duration, json_value, program, record
 from tests.driver.fixtures import replay
@@ -151,8 +152,8 @@ def test_comparison_crash_artifacts(tmp_path: Path, scenario: str,
 
 
 def test_script_expected_rejection(tmp_path: Path) -> None:
-    # JavaCompiler only supports simple diagnostic path characters. Keep the
-    # hyphenated-path counterexample separate, not accepted as a success contract.
+    # JavaCompiler only supports simple diagnostic path characters; the
+    # hyphenated-path case is covered separately below.
     with TemporaryDirectory(prefix='driver_expected_') as directory:
         workspace = Path(directory)
         source = workspace / 'replay.bin'
@@ -174,9 +175,8 @@ class DiagnosticPathLoss(Exception):
     pass
 
 
-@pytest.mark.xfail(strict=True, raises=DiagnosticPathLoss,
-                   reason='JavaCompiler drops the prefix of hyphenated diagnostic paths')
 def test_expected_rejection_with_hyphenated_path(tmp_path: Path) -> None:
+    # The truncated Java diagnostic path is still attributed by its path below src/.
     workspace = tmp_path / 'hyphen-path'
     workspace.mkdir()
     source = workspace / 'replay.bin'
@@ -184,21 +184,22 @@ def test_expected_rejection_with_hyphenated_path(tmp_path: Path) -> None:
     assert_success(launch('tests.driver.scenarios_script.expected_rejection', workspace,
                           ['--language', 'java', '--replay', str(source), '--keep-successful']))
     root = workspace / 'bugs/session'
-    faults = record(json.loads((root / 'faults.json').read_text()))
-    if faults:
-        assert set(faults) == {'1'}
-        assert record(faults['1'])['error'] == (
-            'SHOULD NOT BE COMPILED: String expected but Integer found')
-        raise DiagnosticPathLoss('An actual rejection was attributed as acceptance')
-    # Without false acceptance, the lost path leaves the rejection unattributed.
-    inconclusive = record(json.loads((root / 'inconclusive.json').read_text()))
-    if inconclusive:
-        assert set(inconclusive) == {'1'}
-        case = record(inconclusive['1'])
-        assert case['inconclusive_reason'] == 'unattributable_compiler_failure'
-        compilation = record(record(case['inconclusive_evidence'])['compilation'])
-        output = compilation['output']
-        assert isinstance(output, str) and 'd1_incorrect/Main.java:1: error:' in output
-        raise DiagnosticPathLoss('An actual rejection could not be attributed')
     stats = record(json.loads((root / 'stats.json').read_text()))
     assert stats['totals'] == {'passed': 1, 'failed': 0, 'inconclusive': 0}
+    assert json.loads((root / 'inconclusive.json').read_text()) == {}
+    assert json.loads((root / 'faults.json').read_text()) == {}
+    assert 'Integer answer = 1' in (root / '1/Main.java').read_text()
+    assert 'String answer = 1' in (root / '1/Incorrect.java').read_text()
+    assert not (root / 'tmp').exists()
+
+
+@pytest.mark.xfail(strict=True, raises=DiagnosticPathLoss,
+                   reason='JavaCompiler drops the prefix of hyphenated diagnostic paths')
+def test_java_diagnostic_keeps_hyphenated_path(tmp_path: Path) -> None:
+    source = tmp_path / 'hyphen-path' / 'src' / 'd1_incorrect' / 'Main.java'
+    diagnostics, _ = JavaCompiler(str(source.parents[1])).analyze_compiler_output(
+        f'{source}:1: error: controlled rejection\n')
+    if diagnostics != {str(source): ['1: error: controlled rejection']}:
+        assert diagnostics == {
+            str(source).rsplit('-', 1)[1]: ['1: error: controlled rejection']}
+        raise DiagnosticPathLoss('The diagnostic path lost its hyphenated prefix')

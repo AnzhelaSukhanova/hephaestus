@@ -1,31 +1,37 @@
 import json
 import os
 from pathlib import Path
-import shlex
-import sys
-from typing import TYPE_CHECKING
 
-from tests.driver.support import ROOT, load_driver
-
-if TYPE_CHECKING:
-    from hephaestus import ProgramRes
+from src.modules.models import ProgramRes
+from src.modules.scheduler import gen_program_mul, initialize_scheduler_worker
+from src.modules.worker import WorkerInputs, get_worker_resources
 
 
-def initialize_worker(version: str) -> None:
+def initialize_worker[S](inputs: WorkerInputs[S]) -> None:
     import src.compilers.kotlin as kotlin
-    kotlin.compiler = (shlex.quote(sys.executable) + ' ' +
-                       shlex.quote(str(ROOT / 'tests/driver/fake_compiler.py')))
-    driver = load_driver()
-    manager = driver.setup_crossmodule_manager(version)
-    assert driver.setup_crossmodule_manager(version) is manager
+    kotlinc = str(Path('tools/kotlinc').resolve())
+    resolve_executable = kotlin._compiler_executable
+
+    def hermetic_executable(settings: kotlin.KotlinSettings) -> str:
+        # Spawned workers re-import the adapter, so the runner's substitution is repeated.
+        executable = resolve_executable(settings)
+        return kotlinc if executable.startswith('$HOME/kotlin/') else executable
+
+    kotlin._compiler_executable = hermetic_executable
+    initialize_scheduler_worker(inputs)
+    resources = get_worker_resources()
+    assert resources.scheduler is not None
+    assert resources.scheduler.generation.manager is resources.manager
+    assert resources.scheduler.evaluation.manager is resources.manager
     Path(f'worker_{os.getpid()}.json').write_text(json.dumps({
-        'pid': driver.CROSSMODULE_MANAGER_PID, 'version': manager.compiler_version}))
+        'pid': os.getpid(), 'version': resources.manager.compiler_version}))
 
 
-def probe() -> tuple[int, 'ProgramRes']:
-    driver = load_driver()
+def probe() -> tuple[int, ProgramRes]:
+    scheduler = get_worker_resources().scheduler
+    assert scheduler is not None
     # This body is run only in a worker. The parent sentinel uses a different helper.
-    driver.save_escalations(4321, [])
-    result = driver.gen_program_mul(4321, str(Path('worker_source').resolve()))
+    scheduler.generation.artifacts.save_escalations(4321, [])
+    result = gen_program_mul(4321, str(Path('worker_source').resolve()))
     assert result is not None
     return os.getpid(), result

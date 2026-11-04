@@ -1,5 +1,6 @@
 import pytest
 
+from src.modules.models import OracleResult
 from tests.driver import contracts
 
 
@@ -21,9 +22,12 @@ def test_invalid_program_result(value: object) -> None:
         contracts.program_result(value)
 
 
-@pytest.mark.parametrize('value', [({True: {'error': 'bad'}}, 0, {}, {}),
-                                  ({1: {'error': None}}, 0, {}, {}),
-                                  ({}, -1, {}, {}), ({}, 0, {'1': {}}, {})])
+@pytest.mark.parametrize('value', [({}, 0, {}, {}),
+                                  OracleResult({True: {'error': 'bad'}}),
+                                  OracleResult({1: {'error': None}}),
+                                  OracleResult(compilation_time=-1),
+                                  OracleResult(time_metrics={'1': {}}),
+                                  OracleResult(inconclusive={'1': {}})])
 def test_invalid_oracle_result(value: object) -> None:
     with pytest.raises(AssertionError):
         contracts.oracle_result(value)
@@ -38,8 +42,9 @@ def test_invalid_json(value: object) -> None:
 def test_valid_payloads() -> None:
     contracts.program_result((False, {'programs': {'p.kt': True}, 'time': 0,
                                      'error': None, 'transformations': []}, None, ()))
-    contracts.oracle_result(({1: {'error': 'rejected'}}, 0.5,
-                             {1: {'compile': 0}}, {}))
+    contracts.oracle_result(OracleResult({1: {'error': 'rejected'}}, 0.5,
+                                         {1: {'compile': 0}}, {},
+                                         {2: {'reason': 'unavailable'}}))
     contracts.json_value({'1': [None, True, 'text', 0.5]})
 
 
@@ -48,7 +53,7 @@ def test_valid_payloads() -> None:
                                   {'direct': None, 'closure': [], 'manifest_diff': {}}])
 def test_invalid_publication(value: object) -> None:
     with pytest.raises(AssertionError):
-        contracts.oracle_result(({}, 0, {}, {1: value}))
+        contracts.oracle_result(OracleResult(publications={1: value}))
 
 
 @pytest.mark.parametrize('value', [{}, {'pid': True, 'context': None, 'closure': []},

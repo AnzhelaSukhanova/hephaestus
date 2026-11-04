@@ -24,6 +24,8 @@ def _assert_defect_result(result: CompletedProcess[str], message: str) -> None:
     'mixed_batch', 'filtered_diagnostics', 'unknown_output',
     'report_latest_correct', 'report_latest_incorrect',
     'report_no_match_correct', 'report_no_match_incorrect', 'report_zero',
+    'generation_failed', 'generation_failed_crash', 'missing_injected_error',
+    'unknown_nonzero_output',
 ])
 def test_oracle(scenario: str, tmp_path: Path) -> None:
     assert_success(launch(f'tests.driver.scenarios_oracle.{scenario}', tmp_path,
@@ -59,35 +61,11 @@ def test_enrichment(phase: str, disabled: bool, timing: bool, tmp_path: Path) ->
                           tmp_path, arguments))
 
 
-@pytest.mark.xfail(strict=True, raises=ConfirmedOracleDefect,
-                   reason='Confirmed baseline oracle record/error handling defects')
-@pytest.mark.parametrize(('scenario', 'message'), [
-    ('generation_failed', 'generation-failed record omitted'),
-    ('generation_failed_crash', 'generation-failed record omitted during crash'),
-    ('missing_injected_error', 'None injected error concatenated'),
-])
-def test_oracle_defects(scenario: str, message: str, tmp_path: Path) -> None:
-    result = launch(f'tests.driver.scenarios_oracle.{scenario}', tmp_path,
-                    ['--disable-metrics'])
-    _assert_defect_result(result, message)
-
-
-@pytest.mark.xfail(strict=True, raises=ConfirmedOracleDefect,
-                   reason='check_oracle_mul swallows unexpected oracle exceptions')
 @pytest.mark.parametrize('stacktrace', [False, True])
 def test_wrapper_exception(stacktrace: bool, tmp_path: Path) -> None:
     arguments = ['--disable-metrics'] + (['--print-stacktrace'] if stacktrace else [])
-    result = launch('tests.driver.scenarios_oracle.wrapper_exception',
-                    tmp_path, arguments)
-    _assert_defect_result(result, 'oracle exception swallowed by wrapper')
-
-
-@pytest.mark.xfail(strict=True, raises=ConfirmedOracleDefect,
-                   reason='Unrecognized nonzero compiler output is treated as acceptance')
-def test_unknown_nonzero_output(tmp_path: Path) -> None:
-    result = launch('tests.driver.scenarios_oracle.unknown_nonzero_output', tmp_path,
-                    ['--disable-metrics'])
-    _assert_defect_result(result, 'nonzero compiler failure treated as acceptance')
+    assert_success(launch('tests.driver.scenarios_oracle.wrapper_exception',
+                          tmp_path, arguments))
 
 
 @pytest.mark.parametrize(('returncode', 'stdout', 'stderr'), [

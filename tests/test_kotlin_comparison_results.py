@@ -10,8 +10,11 @@ from src.compilers.kotlin import (
     KotlinCompiler, KotlinSettings, _compiler_executable,
 )
 from src.compilers.results import CompilationRequest, Diagnostic
-from src.modules.oracle_modes import BACKEND_COMPARISON_VARIANTS
+from src.modules.oracle_modes import BackendComparisonMode
 from tests.test_compilation_variants import components
+
+
+BACKEND_COMPARISON_VARIANTS = BackendComparisonMode().variant_settings()
 
 
 @pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])

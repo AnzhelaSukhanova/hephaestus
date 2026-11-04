@@ -4,6 +4,7 @@ from typing import TypeGuard
 
 from src.ir import ast
 from src.ir.context import Context
+from src.modules.models import OracleResult
 
 
 def is_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
@@ -70,18 +71,20 @@ def program_result(value: object) -> None:
 
 
 def oracle_result(value: object) -> None:
-    assert is_sequence(value) and len(value) == 4
-    faults, elapsed, metrics, publications = value
-    duration(elapsed)
-    for pid, stats in record(faults).items():
+    assert isinstance(value, OracleResult), repr(value)
+    duration(value.compilation_time)
+    for pid, stats in record(value.faults).items():
         assert type(pid) is int
         assert isinstance(record(stats)['error'], str)
-    for pid, timings in record(metrics).items():
+    for pid, stats in record(value.inconclusive).items():
+        assert type(pid) is int
+        record(stats)
+    for pid, timings in record(value.time_metrics).items():
         assert type(pid) is int
         for name, timing in record(timings).items():
             assert isinstance(name, str)
             duration(timing)
-    for pid, publication in record(publications).items():
+    for pid, publication in record(value.publications).items():
         assert type(pid) is int
         ledger_record(publication)
 

@@ -5,11 +5,27 @@ from pathlib import Path
 import traceback
 from typing import assert_type
 
+from src import utils
+from src.compilers.results import ProcessResult
+from src.modules.compilation import Compilation
+from src.modules.models import OracleResult, ProgramRes, TimeMetrics
 from tests.driver import contracts
-from tests.driver.oracle_fixtures import (
-    Batch, Commands, OracleDefect, defect_scenario, diagnostic, main_command,
-)
+from tests.driver.oracle_fixtures import Batch, Commands, diagnostic, main_command
 from tests.driver.support import load_driver
+
+
+def _respond[S](compilation: Compilation[S], commands: Commands) -> None:
+    def run_process(arguments: list[str], get_stdout: bool = True,
+                    cwd: str | None = None) -> ProcessResult:
+        status, output = commands(arguments, get_stdout, cwd)
+        return ProcessResult(0 if status else 1, output)
+
+    compilation.run_process = run_process
+
+
+def _check(batch: Batch, commands: Commands) -> OracleResult:
+    _respond(load_driver().compilation, commands)
+    return batch.check()
 
 
 def _truth(expected: bool, accepted: bool) -> None:
@@ -17,10 +33,10 @@ def _truth(expected: bool, accepted: bool) -> None:
     batch = Batch()
     source = batch.add(1, expected)
     commands = Commands([(accepted, '' if accepted else diagnostic(source, 'rejected'))])
-    driver.run_command = commands
-    result = batch.check()
-    faults, _, metrics, _ = result
+    result = _check(batch, commands)
+    faults, metrics = result.faults, result.time_metrics
     assert metrics == {}
+    assert result.inconclusive == {}
     assert set(faults) == ({1} if expected != accepted else set())
     if faults:
         error = ('1:1: rejected' if expected
@@ -30,9 +46,9 @@ def _truth(expected: bool, accepted: bool) -> None:
         assert faults[1]['programs'] == {source: expected}
         batch.preserved(1, expected)
     else:
-        assert not (Path(driver.cli_args.test_directory) / '1').exists()
+        assert not (Path(driver.options.test_directory) / '1').exists()
     assert not batch.directory.exists()
-    assert not (Path(driver.cli_args.test_directory) / 'tmp' / '1').exists()
+    assert not (Path(driver.options.test_directory) / 'tmp' / '1').exists()
     commands.finished([main_command(batch)])
 
 
@@ -70,18 +86,19 @@ def mixed_batch() -> None:
         diagnostic(bad5, 'expected rejection too'),
     ])
     commands = Commands([(False, output)])
-    driver.run_command = commands
-    faults, _, metrics, publications = batch.check()
+    result = _check(batch, commands)
+    faults = result.faults
+    assert result.inconclusive == {}
     assert set(faults) == {2, 3, 5}
     assert faults[2]['error'] == '2:3: first diagnostic\n7:5: second diagnostic'
     assert faults[3]['error'] == 'SHOULD NOT BE COMPILED: injected type mismatch'
     assert faults[5]['error'] == '9:2: another program'
-    assert metrics == publications == {}
+    assert result.time_metrics == result.publications == {}
     for pid, expected in ((2, True), (3, False), (5, True), (5, False)):
         batch.preserved(pid, expected)
     for pid in batch.oracles:
-        assert not (Path(driver.cli_args.test_directory) / 'tmp' / str(pid)).exists()
-        assert (Path(driver.cli_args.test_directory) / str(pid)).exists() == (pid in faults)
+        assert not (Path(driver.options.test_directory) / 'tmp' / str(pid)).exists()
+        assert (Path(driver.options.test_directory) / str(pid)).exists() == (pid in faults)
     assert not batch.directory.exists()
     commands.finished([main_command(batch)])
 
@@ -94,15 +111,16 @@ def filtered_diagnostics() -> None:
     retained = batch.add(3, True)
     patterns = Path('filters.txt')
     patterns.write_text(r'(?m)^.*error: ignored diagnostic$' + '\n')
-    driver.cli_args.error_filter_patterns = str(patterns)
+    driver.options.error_filter_patterns = str(patterns)
     output = '\n'.join([
         diagnostic(good, 'ignored diagnostic'),
         diagnostic(bad, 'ignored diagnostic'),
         diagnostic(retained, 'retained diagnostic', 3, 4),
     ])
     commands = Commands([(False, output)])
-    driver.run_command = commands
-    faults, _, _, _ = batch.check()
+    result = _check(batch, commands)
+    faults = result.faults
+    assert result.inconclusive == {}
     assert set(faults) == {2, 3}
     assert faults[2]['error'] == 'SHOULD NOT BE COMPILED: injected type mismatch'
     assert faults[3]['error'] == '3:4: retained diagnostic'
@@ -118,31 +136,31 @@ def compiler_crash() -> None:
     batch.add(2, False)
     output = 'org.jetbrains.kotlin.CompilerException\ncontrolled compiler crash'
     commands = Commands([(False, output)])
-    driver.run_command = commands
     captured = StringIO()
     with redirect_stdout(captured):
-        faults, _, metrics, _ = batch.check()
+        result = _check(batch, commands)
+    faults = result.faults
     assert set(faults) == {1, 2}
     for pid, expected in ((1, True), (2, False)):
         assert faults[pid]['error'] == output
         batch.preserved(pid, expected)
-    assert metrics == {}
-    assert ('We found compiler crash' in captured.getvalue()) == driver.cli_args.debug
+    assert result.time_metrics == {}
+    assert result.inconclusive == {}
+    assert ('We found compiler crash' in captured.getvalue()) == driver.options.debug
     assert not batch.directory.exists()
     commands.finished([main_command(batch)])
 
 
 def debug_exit() -> None:
     driver = load_driver()
-    assert driver.cli_args.debug
+    assert driver.options.debug
     batch = Batch()
     source = batch.add(1, True)
     commands = Commands([(False, diagnostic(source, 'debug rejection'))])
-    driver.run_command = commands
     captured = StringIO()
     with redirect_stdout(captured):
         try:
-            batch.check()
+            _check(batch, commands)
         except SystemExit as error:
             assert error.code == 1
         else:
@@ -155,7 +173,7 @@ def debug_exit() -> None:
 
 def debug_incorrect_acceptance() -> None:
     driver = load_driver()
-    assert driver.cli_args.debug
+    assert driver.options.debug
     captured = StringIO()
     with redirect_stdout(captured):
         _truth(False, True)
@@ -163,7 +181,6 @@ def debug_incorrect_acceptance() -> None:
 
 
 def _enrichment(profile: str, phase: str) -> None:
-    from hephaestus import TimeMetrics
     from src.compilers.kotlin import KotlinCompiler
 
     driver = load_driver()
@@ -173,28 +190,29 @@ def _enrichment(profile: str, phase: str) -> None:
     batch.add(3, True)
     replies = [(False, diagnostic(source, 'enrich this'))]
     expected = [main_command(batch)]
-    if not driver.cli_args.disable_metrics:
+    if not driver.options.disable_metrics:
         replies.append((False, profile))
         expected.append(KotlinCompiler(source).get_error_enrichment_cmds(source)['xprofile-phases'])
     commands = Commands(replies)
-    driver.run_command = commands
-    faults, elapsed, metrics, _ = batch.check()
+    result = _check(batch, commands)
+    faults, elapsed, metrics = result.faults, result.compilation_time, result.time_metrics
     assert_type(elapsed, float)
     assert_type(metrics, TimeMetrics)
+    assert result.inconclusive == {}
     assert set(faults) == {1, 2}
     assert faults[1]['error'] == '1:1: enrich this'
-    if driver.cli_args.disable_metrics:
+    if driver.options.disable_metrics:
         assert 'error_phase' not in faults[1]
     else:
         assert faults[1]['error_phase'] == phase
     assert 'error_phase' not in faults[2]
     assert 'time_metrics' not in batch.oracles[3].stats
-    if driver.cli_args.time_metrics:
+    if driver.options.time_metrics:
         assert set(metrics) == {1, 2, 3}
         for pid, timing in metrics.items():
             assert timing['generation_cpu'] == 0.125
             assert timing['compilation_with_ir_dumps'] == elapsed
-            if pid != 1 or driver.cli_args.disable_metrics:
+            if pid != 1 or driver.options.disable_metrics:
                 assert timing['phase_profiling'] == 0
         for pid, stats in faults.items():
             assert stats['time_metrics'] == metrics[pid]
@@ -218,8 +236,9 @@ def unknown_output() -> None:
     batch.add(1, True)
     batch.add(2, False)
     commands = Commands([(True, 'compiler informational output without diagnostics')])
-    driver.run_command = commands
-    faults, _, _, _ = batch.check()
+    result = _check(batch, commands)
+    faults = result.faults
+    assert result.inconclusive == {}
     assert set(faults) == {2}
     assert faults[2]['error'] == 'SHOULD NOT BE COMPILED: injected type mismatch'
     assert not batch.directory.exists()
@@ -234,7 +253,7 @@ def _rerun(expected: bool, boundary: str) -> None:
     driver = load_driver()
     batch = Batch()
     source = batch.add(1, expected)
-    temporary = Path(driver.cli_args.test_directory) / 'tmp' / '1'
+    temporary = Path(driver.options.test_directory) / 'tmp' / '1'
     # Both report destinations exist in a real transformed-program run.
     final = temporary / 'program.kt'
     final.write_text('final program\n')
@@ -243,18 +262,18 @@ def _rerun(expected: bool, boundary: str) -> None:
     original_pickle = (temporary / 'program.kt.bin').read_bytes()
     transformations: dict[int, Path] = {}
     for tid in range(1, 4):
-        path = Path(driver.get_transformations_dir(1, tid)) / 'program.kt'
+        path = Path(driver.artifacts.get_transformations_dir(1, tid)) / 'program.kt'
         path.parent.mkdir(parents=True)
         path.write_text(f'transformation {tid}\n')
         program = minimal_program()
         integer = program.bt_factory.get_integer_type()
         program.add_declaration(ast.VariableDeclaration(
             f'transformation{tid}', ast.IntegerConstant(tid, integer), var_type=integer))
-        driver.utils.dump_program(str(path) + '.bin', program)
+        utils.dump_program(str(path) + '.bin', program)
         transformations[tid] = path
     if boundary == 'previous':
-        assert driver.cli_args.rerun
-        assert driver.cli_args.transformations == 3
+        assert driver.options.rerun
+        assert driver.options.transformations == 3
         replies = [(not expected, diagnostic(source, 'rerun mismatch') if expected else ''),
                    (not expected, ''), (expected, '')]
         tids = [3, 2]
@@ -269,18 +288,20 @@ def _rerun(expected: bool, boundary: str) -> None:
         replies = []
         tids = []
     commands = Commands(replies)
-    driver.run_command = commands
+    _respond(driver.compilation, commands)
     expected_commands = [KotlinCompiler(str(transformations[tid])).get_compiler_cmd()
                          for tid in tids]
     if boundary == 'previous':
-        faults, _, _, _ = batch.check()
-        assert set(faults) == {1}
+        result = batch.check()
+        assert set(result.faults) == {1}
+        assert result.inconclusive == {}
+        assert 'secondary_errors' not in result.faults[1]
         expected_commands.insert(0, main_command(batch))
-        destination = Path(driver.cli_args.test_directory) / '1'
+        destination = Path(driver.options.test_directory) / '1'
         assert not batch.directory.exists()
     else:
-        driver._report_failed(1, 0 if boundary == 'zero' else 3,
-                              KotlinCompiler(source), expected)
+        driver.compilation._report_failed(1, 0 if boundary == 'zero' else 3,
+                                          KotlinCompiler(source), expected)
         destination = temporary
     initial = destination / 'initial_program.kt'
     current = destination / 'program.kt'
@@ -288,7 +309,7 @@ def _rerun(expected: bool, boundary: str) -> None:
         tid = 2 if boundary == 'previous' else 3
         assert initial.read_bytes() == transformations[tid].read_bytes()
         assert Path(str(initial) + '.bin').read_bytes() == Path(str(transformations[tid]) + '.bin').read_bytes()
-        contracts.program(driver.utils.load_program(str(initial) + '.bin'))
+        contracts.program(utils.load_program(str(initial) + '.bin'))
     else:
         assert not initial.exists()
         assert not Path(str(initial) + '.bin').exists()
@@ -298,7 +319,7 @@ def _rerun(expected: bool, boundary: str) -> None:
     else:
         assert current.read_bytes() == original_source
         assert Path(str(current) + '.bin').read_bytes() == original_pickle
-    contracts.program(driver.utils.load_program(str(current) + '.bin'))
+    contracts.program(utils.load_program(str(current) + '.bin'))
     commands.finished(expected_commands)
 
 
@@ -334,124 +355,127 @@ def _generation_failed(crash: bool) -> None:
     driver = load_driver()
     batch = Batch()
     batch.add(2, True)
-    failed = driver.ProgramRes(True, {
+    generation_stats = {
         'transformations': ['TypeErasure'], 'error': 'controlled generation failure',
         'program': None, 'time': 0,
-    })
+    }
+    failed = ProgramRes(True, dict(generation_stats))
     contracts.program_result(failed)
     batch.oracles[1] = failed
     crash_output = 'org.jetbrains.kotlin.CompilerException\ncontrolled compiler crash'
     commands = Commands([(not crash, crash_output if crash else '')])
-    driver.run_command = commands
-    faults, _, _, _ = batch.check()
+    result = _check(batch, commands)
     commands.finished([main_command(batch)])
     assert not batch.directory.exists()
-    assert failed.stats['error'] == 'controlled generation failure'
-    expected_others = {2} if crash else set()
-    assert set(faults) - {1} == expected_others
+    assert failed.stats == generation_stats
+    assert set(result.faults) == ({2} if crash else set())
     if crash:
-        assert faults[2]['error'] == crash_output
-    if 1 not in faults:
-        raise OracleDefect('generation-failed record omitted' + (' during crash' if crash else ''))
-    assert faults[1] == failed.stats
+        assert result.faults[2]['error'] == crash_output
+        batch.preserved(2, True)
+    assert result.inconclusive == {1: {
+        **generation_stats, 'oracle': 'compilation',
+        'inconclusive_reason': 'generation_failed',
+        'inconclusive_details': 'controlled generation failure',
+    }}
+    assert not (Path(driver.options.test_directory) / '1').exists()
 
 
 def generation_failed() -> None:
-    defect_scenario(lambda: _generation_failed(False))
+    _generation_failed(False)
 
 
 def generation_failed_crash() -> None:
-    defect_scenario(lambda: _generation_failed(True))
-
-
-def _unknown_nonzero_output() -> None:
-    driver = load_driver()
-    batch = Batch()
-    batch.add(1, True)
-    message = 'controlled compiler failure without a recognized diagnostic'
-    commands = Commands([(False, message)])
-    driver.run_command = commands
-    faults, _, metrics, publications = batch.check()
-    commands.finished([main_command(batch)])
-    assert metrics == {} and publications == {}
-    if not faults:
-        raise OracleDefect('nonzero compiler failure treated as acceptance')
-    assert set(faults) == {1}
-    assert message in faults[1]['error']
+    _generation_failed(True)
 
 
 def unknown_nonzero_output() -> None:
-    defect_scenario(_unknown_nonzero_output)
-
-
-def _missing_injected_error() -> None:
     driver = load_driver()
+    root = Path(driver.options.test_directory)
     batch = Batch()
-    batch.add(1, False, error=None)
-    commands = Commands([(True, '')])
-    driver.run_command = commands
-    try:
-        faults, _, _, _ = batch.check()
-    except TypeError as error:
-        if str(error) != 'can only concatenate str (not "NoneType") to str':
-            raise
-        frames = traceback.extract_tb(error.__traceback__)
-        assert frames[-1].name == 'check_oracle'
-        assert Path(frames[-1].filename).name == 'hephaestus.py'
-        assert batch.oracles[1].stats['error'] is None
-        commands.finished([main_command(batch)])
-        raise OracleDefect('None injected error concatenated') from error
+    source = batch.add(1, True)
+    text = Path(source).read_text()
+    message = 'controlled compiler failure without a recognized diagnostic'
+    commands = Commands([(False, message)])
+    result = _check(batch, commands)
     commands.finished([main_command(batch)])
-    assert set(faults) == {1}
-    assert isinstance(faults[1]['error'], str)
-    assert faults[1]['error'].startswith('SHOULD NOT BE COMPILED:')
-    batch.preserved(1, False)
+    assert result.faults == result.time_metrics == result.publications == {}
+    assert result.inconclusive == {1: {
+        **batch.oracles[1].stats, 'oracle': 'compilation',
+        'inconclusive_reason': 'unattributable_compiler_failure',
+        'inconclusive_details': ('Compiler exited with status 1 without diagnostics '
+                                 'attributable to the batch programs'),
+        'inconclusive_evidence': {'compilation': {
+            'command': main_command(batch), 'cwd': None, 'returncode': 1,
+            'launch_failure': None, 'elapsed': result.compilation_time,
+            'output': message,
+        }},
+    }}
+    assert 'oracle' not in batch.oracles[1].stats
+    batch.preserved(1, True)
+    assert (root / '1' / 'partial_source' / 'program.kt').read_text() == text
+    assert not (root / 'tmp' / '1').exists()
+    assert not batch.directory.exists()
 
 
 def missing_injected_error() -> None:
-    defect_scenario(_missing_injected_error)
+    batch = Batch()
+    batch.add(1, False, error=None)
+    commands = Commands([(True, '')])
+    result = _check(batch, commands)
+    commands.finished([main_command(batch)])
+    assert result.inconclusive == {}
+    assert set(result.faults) == {1}
+    assert result.faults[1]['error'] == 'SHOULD NOT BE COMPILED: '
+    assert result.faults[1] is batch.oracles[1].stats
+    batch.preserved(1, False)
+    assert not batch.directory.exists()
 
 
 class OracleProbeFailure(RuntimeError):
     pass
 
 
-def _wrapper_exception() -> None:
-    from hephaestus import OracleResult
+def wrapper_exception() -> None:
+    from src.modules.scheduler import check_oracle_mul, initialize_scheduler_worker
+    from src.modules.worker import get_worker_resources
 
     driver = load_driver()
+    root = Path(driver.options.test_directory)
     batch = Batch()
-    batch.add(1, True)
+    source = batch.add(1, True)
+    text = Path(source).read_text()
+    initialize_scheduler_worker(driver.scheduler.worker_inputs('hermetic compiler 1.0'))
+    worker = get_worker_resources().scheduler
     failure = OracleProbeFailure('controlled oracle exception')
     calls = 0
 
     def fail(arguments: list[str], get_stdout: bool = True,
-             cwd: str | None = None) -> tuple[bool, str]:
+             cwd: str | None = None) -> ProcessResult:
         nonlocal calls
         assert arguments == main_command(batch)
         assert get_stdout and cwd is None
         calls += 1
         raise failure
 
-    driver.run_command = fail
+    worker.evaluation.compilation.run_process = fail
     captured = StringIO()
     with redirect_stdout(captured):
-        try:
-            result = driver.check_oracle_mul(str(batch.directory), batch.oracles)
-        except OracleProbeFailure as error:
-            assert error is failure
-            assert calls == 1
-            return
-    assert_type(result, OracleResult)
+        result = check_oracle_mul(str(batch.directory), batch.oracles)
+    assert_type(result, OracleResult | None)
+    assert result is not None
     contracts.oracle_result(result)
     assert calls == 1
-    assert result == ({}, 0, {}, {})
-    assert not driver.STOP_COND
-    assert 'Internal error while checking the oracle' in captured.getvalue()
-    assert 'controlled oracle exception' in captured.getvalue()
-    assert ('Traceback (most recent call last):' in captured.getvalue()) == driver.cli_args.print_stacktrace
-    raise OracleDefect('oracle exception swallowed by wrapper')
-
-
-def wrapper_exception() -> None:
-    defect_scenario(_wrapper_exception)
+    assert not worker.stopped
+    details = (''.join(traceback.format_exception(failure))
+               if driver.options.print_stacktrace else 'controlled oracle exception')
+    assert ('Traceback (most recent call last):' in details) == driver.options.print_stacktrace
+    assert captured.getvalue() == f'Internal error while checking the oracle\n{details}\n'
+    assert result == OracleResult(inconclusive={1: {
+        **batch.oracles[1].stats, 'oracle': 'compilation',
+        'inconclusive_reason': 'evaluation_error',
+        'inconclusive_details': 'Evaluation could not be completed: ' + details,
+    }})
+    batch.preserved(1, True)
+    assert (root / '1' / 'partial_source' / 'program.kt').read_text() == text
+    assert not (root / 'tmp' / '1').exists()
+    assert not batch.directory.exists()

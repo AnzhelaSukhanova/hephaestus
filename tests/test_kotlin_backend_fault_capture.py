@@ -157,12 +157,12 @@ def requirements(oracle, backend):
     from src.compilers.kotlin import (
         KotlinCompiler, KotlinSettings, _compiler_executable,
     )
-    from src.modules.oracle_modes import BACKEND_COMPARISON_VARIANTS
+    from src.modules.oracle_modes import BackendComparisonMode
 
     if oracle == "compilation":
         settings = [KotlinSettings(backend=backend)]
     else:
-        settings = list(BACKEND_COMPARISON_VARIANTS.values())
+        settings = list(BackendComparisonMode().variant_settings().values())
     paths = []
     for item in settings:
         paths.append(_compiler_executable(item))

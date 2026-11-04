@@ -1,7 +1,16 @@
-import json
+import re
 import subprocess
 import sys
+import tempfile
+from collections import OrderedDict
 from pathlib import Path
+
+import hephaestus
+from src.compilers.base import BaseCompiler
+from src.compilers.kotlin import KotlinCompiler, KotlinSettings
+from src.compilers.results import ProcessResult
+from src.generators.config import cfg
+from src.modules.models import ProgramRes
 
 
 ROOT = Path(__file__).parents[1]
@@ -18,18 +27,13 @@ def _run_python(script, *cli_args):
 
 
 def _compiler_command(backend):
-    script = """
-import json
-from src.compilers.kotlin import KotlinCompiler
-
-compiler = KotlinCompiler(
-    "/work/src/d7",
-    dependency_klibs=["/published/d3.klib"],
-    module_name="d7",
-)
-print(json.dumps(compiler.get_compiler_cmd()))
-"""
-    return json.loads(_run_python(script, "--backend", backend))
+    compiler = KotlinCompiler(
+        "/work/src/d7",
+        dependency_klibs=["/published/d3.klib"],
+        module_name="d7",
+        settings=KotlinSettings(backend),
+    )
+    return compiler.get_compiler_cmd()
 
 
 def test_native_per_node_command_uses_pid_module_name():
@@ -52,28 +56,27 @@ def test_js_per_node_command_produces_named_klib():
 
 
 def test_run_command_honors_explicit_cwd(tmp_path):
-    script = """
-import json
-import hephaestus
+    fuzzer = hephaestus.Fuzzer(hephaestus.parse_args(
+        ["-b", str(tmp_path / "bugs"), "-n", "session"]))
 
-status, output = hephaestus.run_command(["pwd"], cwd={cwd!r})
-print(json.dumps([status, output.strip()]))
-""".format(cwd=str(tmp_path))
-
-    status, output = json.loads(_run_python(script))
+    status, output = fuzzer.compilation.run_command(["pwd"], cwd=str(tmp_path))
 
     assert status
-    assert output == str(tmp_path)
+    assert output.strip() == str(tmp_path)
 
 
-def test_main_resolves_compiler_version_before_manager_and_worker_setup():
+def test_main_resolves_compiler_version_before_manager_and_worker_setup(tmp_path):
     script = """
+import sys
+
 import hephaestus
+from src.generators.config import cfg
+from src.modules import scheduler
 
 calls = []
 
 
-def version_command(arguments):
+def version_command(arguments, get_stdout=True, cwd=None):
     calls.append(("version", arguments))
     return True, "test compiler\\n"
 
@@ -90,34 +93,25 @@ class Pool:
         pass
 
 
-hephaestus.cfg.prob.crossmodule_probability = 0.0
-hephaestus.run_command = version_command
-hephaestus.mp.Pool = Pool
-hephaestus.setup_live_jacoco = lambda: None
-hephaestus._run = lambda program, results, version: calls.append(
+cfg.prob.crossmodule_probability = 0.0
+fuzzer = hephaestus.Fuzzer(hephaestus.parse_args(sys.argv[1:]))
+fuzzer.compilation.run_command = version_command
+scheduler.mp.Pool = Pool
+fuzzer.coverage.setup_live_jacoco = lambda: None
+fuzzer.scheduler._run_parallel = lambda pool, version, batches: calls.append(
     ("run", version))
-hephaestus.cli_args.debug = False
-hephaestus.cli_args.workers = 1
 
-hephaestus.main()
+fuzzer.start()
 
 assert [call[0] for call in calls] == ["version", "pool", "run"]
-assert calls[1][1] == ("test compiler",)
+inputs, = calls[1][1]
+assert inputs.compiler_version == "test compiler"
 assert calls[2][1] == "test compiler"
-assert hephaestus.CROSSMODULE_MANAGER.compiler_version == "test compiler"
+assert fuzzer.manager.compiler_version == "test compiler"
 """
 
-    _run_python(script)
-
-
-def test_provider_publication_reruns_the_correct_source_after_ncp_batch():
-    script = """
-import os
-import tempfile
-from collections import OrderedDict
-from pathlib import Path
-
-import hephaestus
+    _run_python(script, "-b", str(tmp_path / "bugs"), "-n", "session",
+                "--workers", "1")
 
 
 class Manager:
@@ -125,13 +119,8 @@ class Manager:
         self.published = []
 
     @staticmethod
-    def dependency_klibs(proc_res):
-        assert proc_res is None
-        return []
-
-    @staticmethod
-    def apply_drop_knob(klibs):
-        return klibs, []
+    def enabled():
+        return True
 
     def publish_provider(self, pid, source_klib, command_args, direct, dropped):
         assert Path(source_klib).read_text() == "isolated KLIB"
@@ -139,12 +128,14 @@ class Manager:
         return {"direct": direct, "closure": []}
 
 
-class Compiler:
+class Compiler(BaseCompiler[None]):
+    ERROR_REGEX = re.compile(r"(?m)^(.+\.kt): (.*)$")
+    CRASH_REGEX = re.compile(r"CRASH")
+
     def __init__(self, input_name, filter_patterns=None, dependency_klibs=None,
-                 friend_klibs=None, module_name=None):
-        self.input_name = input_name
+                 friend_klibs=None, module_name=None, *, settings=None):
+        super().__init__(input_name, filter_patterns, settings=settings)
         self.module_name = module_name
-        self.crash_msg = None
 
     def get_compiler_cmd(self):
         return ["fake-compiler", self.input_name]
@@ -152,67 +143,66 @@ class Compiler:
     def get_dependency_artifact_filename(self):
         return self.module_name + ".klib"
 
-    @staticmethod
-    def analyze_compiler_output(output):
-        return ({str(incorrect_program): ["expected NCP error"]}
-                if output else {}), []
+    def get_filename(self, match):
+        return match[0]
+
+    def get_error_msg(self, match):
+        return match[1]
 
 
-with tempfile.TemporaryDirectory() as temp_dir:
-    batch_dir = Path(temp_dir) / "batch"
-    src_dir = batch_dir / "src"
-    correct_program = src_dir / "d1" / "program.kt"
-    incorrect_program = src_dir / "d1_incorrect" / "program.kt"
-    correct_program.parent.mkdir(parents=True)
-    incorrect_program.parent.mkdir()
-    correct_program.write_text("correct")
-    incorrect_program.write_text("incorrect")
-
-    calls = []
-
-    def run_command(command, get_stdout=True, cwd=None):
-        calls.append((command, cwd))
-        klib = Path(cwd) / "d1.klib"
-        if len(calls) == 1:
-            klib.write_text("combined KLIB")
-            return False, "expected NCP error"
-        assert not klib.exists()
-        klib.write_text("isolated KLIB")
-        return True, ""
-
-    def timed(fn, command, **kwargs):
-        duration = 1.0 if command[1] == str(src_dir) else 2.0
-        return fn(command, **kwargs), duration
-
+def test_provider_publication_reruns_the_correct_source_after_ncp_batch(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg.prob, "crossmodule_probability", 0.5)
+    fuzzer = hephaestus.Fuzzer(
+        hephaestus.parse_args(["-b", str(tmp_path / "bugs"), "-n", "session"]),
+        compiler_types={"kotlin": Compiler})
     manager = Manager()
-    hephaestus.CROSSMODULE_MANAGER = manager
-    hephaestus.COMPILERS["kotlin"] = Compiler
-    hephaestus.run_command = run_command
-    hephaestus.timed = timed
-    hephaestus.cfg.prob.crossmodule_probability = 0.5
-    hephaestus.cli_args.language = "kotlin"
-    hephaestus.cli_args.keep_successful = False
-    hephaestus.cli_args.time_metrics = False
-    hephaestus.cli_args.debug = False
-    hephaestus.cli_args.rerun = False
+    fuzzer.evaluation.manager = manager
+    # Diagnostic paths must not contain hyphens, unlike pytest's temporary paths.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        batch_dir = Path(temp_dir) / "batch"
+        src_dir = batch_dir / "src"
+        correct_program = src_dir / "d1" / "program.kt"
+        incorrect_program = src_dir / "d1_incorrect" / "program.kt"
+        correct_program.parent.mkdir(parents=True)
+        incorrect_program.parent.mkdir()
+        correct_program.write_text("correct")
+        incorrect_program.write_text("incorrect")
 
-    stats = {
-        "error": None,
-        "programs": {
-            str(correct_program): True,
-            str(incorrect_program): False,
-        },
-        "time": 0.0,
-    }
-    result = hephaestus.check_oracle(
-        str(batch_dir), OrderedDict([(1, hephaestus.ProgramRes(False, stats))]))
+        calls = []
 
-    assert result[0] == {}
-    assert result[1] == 3.0
-    assert list(result[3]) == [1]
-    assert [command[1] for command, _ in calls] == [
-        str(src_dir), str(correct_program)]
-    assert len(manager.published) == 1
-"""
+        def run_process(command, get_stdout=True, cwd=None):
+            calls.append((command, cwd))
+            klib = Path(cwd) / "d1.klib"
+            if len(calls) == 1:
+                klib.write_text("combined KLIB")
+                return ProcessResult(1, f"{incorrect_program}: expected NCP error")
+            assert not klib.exists()
+            klib.write_text("isolated KLIB")
+            return ProcessResult(0, "")
 
-    _run_python(script)
+        def timed(fn, command, **kwargs):
+            duration = 1.0 if command[1] == str(src_dir) else 2.0
+            return fn(command, **kwargs), duration
+
+        fuzzer.compilation.run_process = run_process
+        fuzzer.compilation.timed = timed
+        stats = {
+            "error": None,
+            "programs": {
+                str(correct_program): True,
+                str(incorrect_program): False,
+            },
+            "time": 0.0,
+        }
+        result = fuzzer.evaluation.check_oracle(
+            str(batch_dir), OrderedDict([(1, ProgramRes(False, stats))]))
+
+        assert result.faults == {}
+        assert result.inconclusive == {}
+        assert result.compilation_time == 3.0
+        assert list(result.publications) == [1]
+        assert [command[1] for command, _ in calls] == [
+            str(src_dir), str(correct_program)]
+        assert [cwd for _, cwd in calls] == [str(src_dir / "d1")] * 2
+        assert len(manager.published) == 1

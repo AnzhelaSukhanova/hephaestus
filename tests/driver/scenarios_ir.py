@@ -10,6 +10,7 @@ import zipfile
 
 import pytest
 
+from src.modules import artifacts
 from src.tools import ir_coverage
 from src.tools.ir_csv import PHASES
 from tests.driver.support import load_driver
@@ -37,7 +38,7 @@ def tools() -> Iterator[None]:
 
 def summaries() -> None:
     driver = load_driver()
-    driver.cli_args.dump_ir = True
+    driver.options.dump_ir = True
     root = Path('batch')
     dumps = root / 'src/ir/module'
     dumps.mkdir(parents=True)
@@ -49,7 +50,7 @@ def summaries() -> None:
     expected: dict[str, int | None] = {f'{number}_{name}': None for number, name in PHASES}
     expected[f'{PHASES[0][0]}_{PHASES[0][1]}'] = 0
     expected[f'{PHASES[1][0]}_{PHASES[1][1]}'] = 1
-    summary = Path(driver.cli_args.test_directory) / 'tmp/7/ir_changes.json'
+    summary = Path(driver.options.test_directory) / 'tmp/7/ir_changes.json'
     remove = shutil.rmtree
 
     def checked_remove(path: str) -> None:
@@ -57,28 +58,28 @@ def summaries() -> None:
         assert json.loads(summary.read_text()) == expected
         remove(path)
 
-    with patch.object(driver.shutil, 'rmtree', checked_remove):
-        assert driver.preserve_ir_changes_to_tmp(str(root), 7) == expected
+    with patch.object(artifacts.shutil, 'rmtree', checked_remove):
+        assert driver.artifacts.preserve_ir_changes_to_tmp(str(root), 7) == expected
     assert not dumps.exists()
-    assert driver.preserve_ir_changes_to_tmp('absent', 8) == {
+    assert driver.artifacts.preserve_ir_changes_to_tmp('absent', 8) == {
         f'{number}_{name}': None for number, name in PHASES}
-    driver.cli_args.dump_ir = False
-    assert driver.preserve_ir_changes_to_tmp(str(root), 9) is None
+    driver.options.dump_ir = False
+    assert driver.artifacts.preserve_ir_changes_to_tmp(str(root), 9) is None
     assert not (summary.parent.parent / '9').exists()
 
 
 def setup() -> None:
     driver = load_driver()
-    root = driver.jacoco_output_dir()
-    driver.setup_live_jacoco()
+    root = driver.coverage.jacoco_output_dir()
+    driver.coverage.setup_live_jacoco()
     assert not root.exists()
     root.mkdir(parents=True)
     (root / 'jacoco.exec').write_text('stale')
     (root / 'logs').mkdir()
     (root / 'logs/old.log').write_text('stale')
-    driver.cli_args.jacoco_always = True
+    driver.options.jacoco_always = True
     with tools():
-        driver.setup_live_jacoco()
+        driver.coverage.setup_live_jacoco()
     assert not (root / 'jacoco.exec').exists()
     assert not (root / 'logs/old.log').exists()
     assert (root / 'classes' / CLASS_FILE).read_bytes() == b'class bytes'
@@ -121,23 +122,23 @@ def assert_unlocked(root: Path) -> None:
 
 def merge() -> None:
     driver = load_driver()
-    driver.cli_args.jacoco_always = True
+    driver.options.jacoco_always = True
     java = JavaExecution()
     with tools(), patch.object(ir_coverage.subprocess, 'run', java.run):
-        driver.setup_live_jacoco()
-        root = driver.jacoco_output_dir()
-        driver._refresh_jacoco_report(root)
+        driver.coverage.setup_live_jacoco()
+        root = driver.coverage.jacoco_output_dir()
+        driver.coverage._refresh_jacoco_report(root)
         assert java.calls == []
         assert_unlocked(root)
         (root / 'execs/2.exec').write_bytes(b'2')
         (root / 'execs/1.exec').write_bytes(b'1')
-        driver._refresh_jacoco_report(root)
+        driver.coverage._refresh_jacoco_report(root)
         assert (root / 'jacoco.exec').read_bytes() == b'12'
         assert not list((root / 'execs').iterdir())
         assert not (root / 'jacoco.exec.new').exists()
         assert (root / 'report.xml').read_text() == 'controlled report'
         (root / 'execs/3.exec').write_bytes(b'3')
-        driver._refresh_jacoco_report(root)
+        driver.coverage._refresh_jacoco_report(root)
         assert (root / 'jacoco.exec').read_bytes() == b'123'
         assert java.calls[2][4:6] == [str(root / 'jacoco.exec'), str(root / 'execs/3.exec')]
         assert 'controlled report success' in (root / 'jacoco-report.log').read_text()
@@ -154,15 +155,15 @@ def report_failure() -> None:
 
 def failed_refresh(action: str) -> None:
     driver = load_driver()
-    driver.cli_args.jacoco_always = True
+    driver.options.jacoco_always = True
     java = JavaExecution(action)
     with tools(), patch.object(ir_coverage.subprocess, 'run', java.run):
-        driver.setup_live_jacoco()
-        root = driver.jacoco_output_dir()
+        driver.coverage.setup_live_jacoco()
+        root = driver.coverage.jacoco_output_dir()
         (root / 'jacoco.exec').write_bytes(b'old')
         (root / 'execs/1.exec').write_bytes(b'new')
         with pytest.raises(SystemExit, match='JaCoCo.*failed'):
-            driver._refresh_jacoco_report(root)
+            driver.coverage._refresh_jacoco_report(root)
         if action == 'merge':
             assert (root / 'jacoco.exec').read_bytes() == b'old'
             assert (root / 'execs/1.exec').read_bytes() == b'new'
@@ -175,10 +176,10 @@ def failed_refresh(action: str) -> None:
 
 def live_compile() -> None:
     driver = load_driver()
-    driver.cli_args.jacoco_always = True
+    driver.options.jacoco_always = True
     stages: list[Path] = []
     java = JavaExecution()
-    root = driver.jacoco_output_dir()
+    root = driver.coverage.jacoco_output_dir()
 
     def compile_command(arguments: list[str], get_stdout: bool = True,
                         cwd: str | None = None) -> tuple[bool, str]:
@@ -194,25 +195,25 @@ def live_compile() -> None:
             Path(destination).write_bytes(b'execution')
         return False, 'controlled compiler diagnostics'
 
-    with tools(), patch.object(driver, 'run_command', compile_command), \
+    with tools(), patch.object(driver.compilation, 'run_command', compile_command), \
             patch.object(ir_coverage.subprocess, 'run', java.run):
-        driver.setup_live_jacoco()
-        driver.maybe_run_live_jacoco(1, None)
+        driver.coverage.setup_live_jacoco()
+        driver.coverage.maybe_run_live_jacoco(1, None)
         assert stages == []  # Source must have been preserved first.
         source = root.parent / '1/program.kt'
         source.parent.mkdir()
         source.write_text('val answer = 1')
-        driver.cli_args.jacoco_always = False
-        driver.maybe_run_live_jacoco(1, {COLUMN: 1})
-        driver.cli_args.jacoco_lowerings = ['FunctionInlining']
+        driver.options.jacoco_always = False
+        driver.coverage.maybe_run_live_jacoco(1, {COLUMN: 1})
+        driver.options.jacoco_lowerings = ['FunctionInlining']
         for changes in (None, {}, {COLUMN: 0}, {COLUMN: None}, {'other': 1}):
-            driver.maybe_run_live_jacoco(1, changes)
+            driver.coverage.maybe_run_live_jacoco(1, changes)
         assert stages == []
-        driver.maybe_run_live_jacoco(1, {COLUMN: 1})
+        driver.coverage.maybe_run_live_jacoco(1, {COLUMN: 1})
         assert not (root / 'jacoco.exec').exists()
         assert java.calls == []
-        driver.cli_args.jacoco_always = True
-        driver.maybe_run_live_jacoco(1, None)
+        driver.options.jacoco_always = True
+        driver.coverage.maybe_run_live_jacoco(1, None)
         assert (root / 'jacoco.exec').read_bytes() == b'execution'
         assert (root / 'logs/1.log').read_text() == 'controlled compiler diagnostics'
         assert all(not stage.exists() for stage in stages)

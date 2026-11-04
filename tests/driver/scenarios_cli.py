@@ -4,45 +4,54 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import patch
 
 
 def basic() -> None:
-    pass
+    from tests.driver.support import load_driver
+
+    load_driver()
 
 
 def validate() -> None:
+    from src.args import validate_args
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    driver.validate_args(driver.cli_args)
+    validate_args(driver.options)
 
 
 def requires_correctness_preserving() -> None:
+    from src.args import validate_args
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    with patch.object(driver.cli_args,
+    with patch.object(driver.options,
                       "only_correctness_preserving_transformations", False):
-        driver.validate_args(driver.cli_args)
+        validate_args(driver.options)
 
 
 def requires_transformation_source() -> None:
+    from src.args import validate_args
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    with patch.object(driver.cli_args, "transformations", None):
-        driver.validate_args(driver.cli_args)
+    with patch.object(driver.options, "transformations", None):
+        validate_args(driver.options)
 
 
 def defaults() -> None:
+    from src.args import validate_args
+    from src.generators.config import cfg
     from tests.driver.support import load_driver
 
     driver = load_driver()
     workspace = Path.cwd()
-    args = driver.cli_args
+    args = driver.options
+    stats = driver.reporting.stats
     assert args.language == "kotlin"
     assert args.backend == "native"
     assert args.iterations == 1
@@ -67,46 +76,51 @@ def defaults() -> None:
         "TypeErasure": {"timeout": 600},
         "TypeOverwriting": {"timeout": 600},
     }
-    assert driver.cfg.prob.crossmodule_probability == 0
-    assert driver.STATS["Info"]["stop_cond_value"] == 1
-    assert driver.STATS["Info"]["language"] == "kotlin"
-    assert driver.STATS["totals"] == {"passed": 0, "failed": 0}
-    assert "crossmodule" not in driver.STATS
-    driver.validate_args(args)
+    assert cfg.prob.crossmodule_probability == 0
+    assert stats["Info"]["stop_cond_value"] == 1
+    assert stats["Info"]["language"] == "kotlin"
+    assert stats["totals"] == {"passed": 0, "failed": 0, "inconclusive": 0}
+    assert "crossmodule" not in stats
+    validate_args(args)
     assert not Path(args.bugs).exists()
 
 
 def configuration() -> None:
+    from src.args import validate_args
+    from src.generators.config import cfg
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    assert driver.cfg.limits.max_depth == 4
-    assert driver.cfg.limits.max_type_params == 2
-    assert driver.cfg.limits.inline_default_depth == 3
-    assert driver.cfg.limits.max_var_decls == 8
-    assert driver.cfg.dis.use_site_variance is False
-    assert driver.cfg.dis.use_site_contravariance is False
-    assert driver.cfg.prob.bounded_type_parameters == 0.8
-    assert driver.cfg.prob.parameterized_functions == 0.8
-    assert driver.cfg.prob.reified_type_parameters == 0.8
-    assert driver.cfg.prob.crossmodule_probability == 0
-    driver.validate_args(driver.cli_args)
+    assert cfg.limits.max_depth == 4
+    assert cfg.limits.max_type_params == 2
+    assert cfg.limits.inline_default_depth == 3
+    assert cfg.limits.max_var_decls == 8
+    assert cfg.dis.use_site_variance is False
+    assert cfg.dis.use_site_contravariance is False
+    assert cfg.prob.bounded_type_parameters == 0.8
+    assert cfg.prob.parameterized_functions == 0.8
+    assert cfg.prob.reified_type_parameters == 0.8
+    assert cfg.prob.crossmodule_probability == 0
+    validate_args(driver.options)
 
 
 def configuration_flags() -> None:
+    from src.args import validate_args
+    from src.generators.config import cfg
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    args = driver.cli_args
-    assert driver.cfg.limits.max_depth == 0
-    assert driver.cfg.limits.max_type_params == 0
-    assert driver.cfg.limits.inline_default_depth == 0
-    assert driver.cfg.limits.max_var_decls == 8
-    assert driver.cfg.dis.use_site_variance is True
-    assert driver.cfg.dis.use_site_contravariance is True
-    assert driver.cfg.prob.bounded_type_parameters == 0
-    assert driver.cfg.prob.parameterized_functions == 0
-    assert driver.cfg.prob.reified_type_parameters == 0
+    args = driver.options
+    stats = driver.reporting.stats
+    assert cfg.limits.max_depth == 0
+    assert cfg.limits.max_type_params == 0
+    assert cfg.limits.inline_default_depth == 0
+    assert cfg.limits.max_var_decls == 8
+    assert cfg.dis.use_site_variance is True
+    assert cfg.dis.use_site_contravariance is True
+    assert cfg.prob.bounded_type_parameters == 0
+    assert cfg.prob.parameterized_functions == 0
+    assert cfg.prob.reified_type_parameters == 0
     assert args.keep_successful and not args.keep_all
     assert args.time_metrics and args.disable_metrics and args.dump_ir
     assert args.dry_run and args.log and args.print_stacktrace
@@ -120,84 +134,51 @@ def configuration_flags() -> None:
         "TypeErasure": {"timeout": 17},
         "TypeOverwriting": {"timeout": 17},
     }
-    assert driver.STATS["Info"]["stop_cond"] == "timeout"
-    assert driver.STATS["Info"]["stop_cond_value"] == 30
-    assert driver.STATS["Info"]["transformation_types"] == ""
-    driver.validate_args(args)
+    assert stats["Info"]["stop_cond"] == "timeout"
+    assert stats["Info"]["stop_cond_value"] == 30
+    assert stats["Info"]["transformation_types"] == ""
+    validate_args(args)
 
 
 def non_kotlin() -> None:
+    from src.args import validate_args
+    from src.generators.config import cfg
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    assert driver.cli_args.language != "kotlin"
-    assert driver.cfg.prob.crossmodule_probability == 0
-    assert "crossmodule" not in driver.STATS
-    driver.validate_args(driver.cli_args)
-
-
-def startup() -> None:
-    from tests.driver.support import load_driver
-
-    driver = load_driver()
-    events = Mock()
-    command = driver.COMPILERS[driver.cli_args.language].get_compiler_version()
-    with (
-        patch.object(driver, "validate_args") as validation,
-        patch.object(driver, "pre_process_args") as preprocessing,
-        patch.object(driver, "run_command",
-                     return_value=(True, " \n compiler version 1.2 \t\n")) as version,
-        patch.object(driver, "setup_crossmodule_manager") as manager,
-        patch.object(driver, "setup_live_jacoco") as jacoco,
-        patch.object(driver, "run") as sequential,
-        patch.object(driver, "run_parallel") as parallel,
-    ):
-        events.attach_mock(validation, "validate")
-        events.attach_mock(preprocessing, "preprocess")
-        events.attach_mock(version, "version")
-        events.attach_mock(manager, "manager")
-        events.attach_mock(jacoco, "jacoco")
-        events.attach_mock(sequential, "run")
-        events.attach_mock(parallel, "parallel")
-        driver.main()
-    dispatch = (call.run("compiler version 1.2")
-                if driver.cli_args.debug or driver.cli_args.workers is None
-                else call.parallel("compiler version 1.2"))
-    assert events.mock_calls == [
-        call.validate(driver.cli_args),
-        call.preprocess(driver.cli_args),
-        call.version(command),
-        call.manager("compiler version 1.2"),
-        call.jacoco(),
-        dispatch,
-    ]
+    assert driver.options.language != "kotlin"
+    assert cfg.prob.crossmodule_probability == 0
+    assert "crossmodule" not in driver.reporting.stats
+    validate_args(driver.options)
 
 
 def helpers() -> None:
+    from src import utils
+    from src.args import pre_process_args
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    test_directory = Path(driver.cli_args.test_directory)
-    assert Path(driver.get_generator_dir(7)) == (
+    test_directory = Path(driver.options.test_directory)
+    assert Path(driver.artifacts.get_generator_dir(7)) == (
         test_directory / "generator" / "iter_7")
-    assert Path(driver.get_transformations_dir(7, 3)) == (
+    assert Path(driver.artifacts.get_transformations_dir(7, 3)) == (
         test_directory / "transformations" / "iter_7" / "3")
     assert not test_directory.exists()
-    with patch("src.args.mkdir", wraps=driver.utils.mkdir) as mkdir:
-        driver.pre_process_args(driver.cli_args)
-        bugs = Path(driver.cli_args.bugs)
+    with patch("src.args.mkdir", wraps=utils.mkdir) as mkdir:
+        pre_process_args(driver.options)
+        bugs = Path(driver.options.bugs)
         assert bugs.is_dir()
         marker = bugs / "keep.txt"
         marker.write_text("preserved", encoding="utf-8")
-        driver.pre_process_args(driver.cli_args)
-        mkdir.assert_called_once_with(driver.cli_args.bugs)
+        pre_process_args(driver.options)
+        mkdir.assert_called_once_with(driver.options.bugs)
         assert marker.read_text(encoding="utf-8") == "preserved"
 
     def combine(value: int, *, suffix: str) -> str:
         return str(value) + suffix
 
-    with patch.object(driver.time, "perf_counter", side_effect=[10.0, 10.25]) as clock:
-        assert driver.timed(combine, 4, suffix="!") == ("4!", 0.25)
+    with patch.object(time, "perf_counter", side_effect=[10.0, 10.25]) as clock:
+        assert driver.compilation.timed(combine, 4, suffix="!") == ("4!", 0.25)
         assert clock.call_count == 2
 
     failure = ValueError("timed callable failed")
@@ -205,9 +186,9 @@ def helpers() -> None:
     def fail() -> None:
         raise failure
 
-    with patch.object(driver.time, "perf_counter", return_value=10.0) as clock:
+    with patch.object(time, "perf_counter", return_value=10.0) as clock:
         try:
-            driver.timed(fail)
+            driver.compilation.timed(fail)
         except ValueError as error:
             assert error is failure
         else:
@@ -219,26 +200,27 @@ def logging_and_progress() -> None:
     from tests.driver.support import load_driver
 
     driver = load_driver()
-    args = driver.cli_args
-    driver.STATS["totals"].update(passed=3, failed=2)
+    args = driver.options
+    reporting = driver.reporting
+    reporting.stats["totals"].update(passed=3, failed=2, inconclusive=1)
     output = io.StringIO()
     with redirect_stdout(output), patch.object(args, "iterations", 8):
-        driver.print_msg()
+        reporting.print_msg()
     assert output.getvalue() == (
         "\033[2K\033[1GTest Programs Passed 3 / 8 ✔\t\t"
-        "Test Programs Failed 2 / 8 ✘\r")
+        "Test Programs Failed 2 / 8 ✘  Inconclusive 1 / 8\r")
     output = io.StringIO()
     with redirect_stdout(output), patch.object(args, "iterations", 0):
-        driver.print_msg()
+        reporting.print_msg()
     assert output.getvalue() == (
-        "\033[2K\033[1GTest Programs Passed 3 / 5 ✔\t\t"
-        "Test Programs Failed 2 / 5 ✘\r")
+        "\033[2K\033[1GTest Programs Passed 3 / 6 ✔\t\t"
+        "Test Programs Failed 2 / 6 ✘  Inconclusive 1 / 6\r")
 
     log_file = Path(args.log_file)
     log_file.write_text("existing log\n", encoding="utf-8")
     output = io.StringIO()
-    with redirect_stdout(output), patch.object(driver, "print_msg") as progress:
-        driver.logging("compiler version")
+    with redirect_stdout(output), patch.object(reporting, "print_msg") as progress:
+        reporting.logging("compiler version")
         if args.debug:
             progress.assert_not_called()
         else:
@@ -251,7 +233,7 @@ def logging_and_progress() -> None:
         assert label in text
     assert ("Warning: To stop the tool" in text) == (
         not args.seconds and not args.iterations)
-    assert driver.STATS["Info"]["compiler"] == "compiler version"
+    assert reporting.stats["Info"]["compiler"] == "compiler version"
     lines = log_file.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert lines[0] == "existing log"
@@ -286,6 +268,7 @@ def _expected_output(cwd: Path, argument: str) -> str:
 
 
 def _command_output(exit_code: int) -> None:
+    from src.compilers.results import ProcessResult
     from tests.driver.support import load_driver
 
     driver = load_driver()
@@ -295,12 +278,15 @@ def _command_output(exit_code: int) -> None:
     child_cwd.mkdir()
     argument = "spaces, 'quotes', and $literal"
     command = _python_command(script, str(exit_code), argument)
+    compilation = driver.compilation
     with patch.dict(os.environ, {"JAVA_OPTS": "-Xmx64m"}):
-        assert driver.run_command(command, cwd=str(child_cwd)) == (
+        assert compilation.run_command(command, cwd=str(child_cwd)) == (
             exit_code == 0, _expected_output(child_cwd, argument))
-        assert driver.run_command(command, get_stdout=False, cwd=str(child_cwd)) == (
-            exit_code == 0, "")
-        assert driver.run_command(command) == (
+        assert compilation.run_process(command, cwd=str(child_cwd)) == ProcessResult(
+            exit_code, _expected_output(child_cwd, argument))
+        assert compilation.run_command(
+            command, get_stdout=False, cwd=str(child_cwd)) == (exit_code == 0, "")
+        assert compilation.run_command(command) == (
             exit_code == 0, _expected_output(workspace, argument))
         assert os.environ["JAVA_OPTS"] == "-Xmx64m"
     assert Path.cwd() == workspace
@@ -320,7 +306,7 @@ def command_empty_output() -> None:
     driver = load_driver()
     script = Path.cwd() / "empty script.py"
     script.write_text("pass\n", encoding="utf-8")
-    assert driver.run_command(_python_command(script)) == (True, "")
+    assert driver.compilation.run_command(_python_command(script)) == (True, "")
 
 
 def command_groovy() -> None:
@@ -337,19 +323,19 @@ def command_groovy() -> None:
         encoding="utf-8",
     )
     executable.chmod(0o755)
-    temporary_cwd = Path(driver.cli_args.test_directory) / "tmp"
+    temporary_cwd = Path(driver.options.test_directory) / "tmp"
     argument = "groovy argument"
     with patch.dict(os.environ, {
         "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
         "JAVA_OPTS": "-Xmx64m",
     }):
         for exit_code in (0, 9):
-            assert driver.run_command([
+            assert driver.compilation.run_command([
                 "groovyc", str(exit_code), shlex.quote(argument),
             ]) == (exit_code == 0, _expected_output(temporary_cwd, argument))
             assert temporary_cwd.is_dir()
             assert Path.cwd() == workspace
-        assert driver.run_command(
+        assert driver.compilation.run_command(
             ["groovyc", "0", shlex.quote(argument)], cwd=str(workspace),
         ) == (True, _expected_output(workspace, argument))
         assert os.environ["JAVA_OPTS"] == "-Xmx64m"
@@ -357,22 +343,24 @@ def command_groovy() -> None:
 
 
 def command_launch_errors() -> None:
+    from src.compilers.results import ProcessResult
     from tests.driver.support import load_driver
 
     driver = load_driver()
+    compilation = driver.compilation
+    workspace = Path.cwd()
     command = [shlex.quote(sys.executable), "unused-script.py"]
     failure = subprocess.CalledProcessError(4, command, output=b"launch failed")
-    with patch.object(driver.sp, "Popen", side_effect=failure) as popen:
-        status, output = driver.run_command(command)
-        assert status is False
-        assert output is failure
-        popen.assert_called_once()
     launch_error = OSError("controlled launch error")
-    with patch.object(driver.sp, "Popen", side_effect=launch_error) as popen:
-        try:
-            driver.run_command(command)
-        except OSError as error:
-            assert error is launch_error
-        else:
-            raise AssertionError("run_command() swallowed an OSError")
+    for error in (failure, launch_error):
+        with patch.object(subprocess, "Popen", side_effect=error) as popen:
+            assert compilation.run_command(command) == (False, str(error))
+            assert compilation.run_process(command) == ProcessResult(
+                None, str(error), str(error))
+            assert popen.call_count == 2
+    with patch.object(subprocess, "Popen", side_effect=launch_error) as popen:
+        assert compilation.run_command(["groovyc", "unused.groovy"]) == (
+            False, str(launch_error))
         popen.assert_called_once()
+    assert Path(driver.options.test_directory, "tmp").is_dir()
+    assert Path.cwd() == workspace

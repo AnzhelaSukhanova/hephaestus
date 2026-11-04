@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 import zipfile
 
+from src.compilers.results import ProcessResult
 from src.ir import ast
 from src.ir.context import Context
 from src.modules.processor import ProgramProcessor
@@ -55,13 +56,13 @@ def assert_command(arguments: list[str], backend: str, source: Path,
     else:
         stdlib = ('$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-' +
                   ('wasm-' if backend == 'wasm' else '') +
-                  'js-2.4.255-SNAPSHOT.klib')
+                  'js-2.5.255-SNAPSHOT.klib')
         expected += ['-Xir-produce-klib-file', '-ir-output-dir', '.',
                      '-ir-output-name', module,
                      '-libraries', os.pathsep.join([stdlib, *dependencies]),
                      '-nowarn', '-Xklib-ir-inliner=full']
         if dependencies:
-            expected += ['-Xfriend-modules', dependencies[0]]
+            expected += ['-Xfriend-modules=' + dependencies[0]]
     assert arguments[1:] == expected
 
 
@@ -84,7 +85,7 @@ class Commands:
     calls: list[list[str]] = field(default_factory=list)
 
     def __call__(self, arguments: list[str], get_stdout: bool = True,
-                 cwd: str | None = None) -> tuple[bool, str]:
+                 cwd: str | None = None) -> ProcessResult:
         assert len(self.calls) < len(self.steps), arguments
         step = self.steps[len(self.calls)]
         assert get_stdout
@@ -99,7 +100,7 @@ class Commands:
         self.calls.append(list(arguments))
         write_klib(destination, step.layout, step.manifest,
                    'batch' if len(self.calls) == 1 else 'isolated')
-        return step.status, step.output
+        return ProcessResult(0 if step.status else 1, step.output)
 
     def finished(self) -> None:
         assert len(self.calls) == len(self.steps)

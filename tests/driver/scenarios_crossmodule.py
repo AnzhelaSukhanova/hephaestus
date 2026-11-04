@@ -9,9 +9,12 @@ from typing import assert_type
 from unittest.mock import patch
 
 from src import utils
-from src.compilers.kotlin import KotlinCompiler
+from src.compilers.kotlin import KotlinCompiler, KotlinSettings
+from src.compilers.results import ProcessResult
+from src.generators.config import cfg
 from src.ir import ast
 from src.ir.context import Context
+from src.modules import generation
 from src.modules.crossmodule import CrossModuleManager, ManifestDiff, PublicationRecord
 from src.modules.models import OracleResult, ProgramRes
 from tests.driver import contracts
@@ -24,6 +27,14 @@ from tests.driver.support import load_driver
 
 
 driver = load_driver()
+
+
+def _compiler(source: Path, dependencies: list[str] | None = None,
+              friends: list[str] | None = None,
+              module: str | None = None) -> KotlinCompiler:
+    return KotlinCompiler(str(source), dependency_klibs=dependencies,
+                          friend_klibs=friends, module_name=module,
+                          settings=KotlinSettings(backend=driver.options.backend))
 
 
 @dataclass
@@ -45,17 +56,21 @@ class Node:
 
 
 def _setup() -> CrossModuleManager:
-    driver.cfg.prob.crossmodule_probability = 1.0
-    driver.cfg.prob.max_module_chain_depth = 0
-    driver.cfg.prob.drop_indirect_deps_prob = 0.0
-    driver.cfg.limits.min_top_level = 0
-    driver.cfg.limits.max_top_level = 0
-    driver.cfg.limits.max_depth = 0
-    driver.cli_args.transformations = 0
-    driver.cli_args.replay = None
+    cfg.prob.crossmodule_probability = 1.0
+    cfg.prob.max_module_chain_depth = 0
+    cfg.prob.drop_indirect_deps_prob = 0.0
+    cfg.limits.min_top_level = 0
+    cfg.limits.max_top_level = 0
+    cfg.limits.max_depth = 0
+    driver.options.transformations = 0
+    driver.options.replay = None
     utils.random.r.seed(27)
     manager = driver.setup_crossmodule_manager('hermetic compiler 1.0')
     assert type(manager) is CrossModuleManager
+    assert driver.manager is manager
+    assert driver.generation.manager is manager
+    assert driver.evaluation.manager is manager
+    assert driver.reporting.manager is manager
     manager.random = deepcopy(utils.random)
     return manager
 
@@ -65,16 +80,17 @@ def _generate(manager: CrossModuleManager, pid: int, relative: bool = False,
     directory = Path(f'batch{pid}')
     if not relative:
         directory = directory.resolve()
-    args = driver.cli_args
+    args = driver.options
     options = ProcessorOptions(
         transformations=0, test_directory=args.test_directory,
         name=args.name, options=args.options)
     processor_type = FaultProcessor if ncp else RecordingProcessor
     processor = processor_type(pid, options, f'src.d{pid}')
     manager.random.r.seed(0)
-    with patch.object(driver, 'ProgramProcessor', return_value=processor), \
+    with patch.object(generation, 'ProgramProcessor', return_value=processor) as constructor, \
             patch.object(args, 'only_correctness_preserving_transformations', not ncp):
-        result = driver.gen_program(pid, str(directory / 'src'))
+        result = driver.generation.gen_program(pid, str(directory / 'src'))
+    constructor.assert_called_once_with(pid, args, f'src.d{pid}')
     assert_type(result, ProgramRes)
     contracts.program_result(result)
     assert not result.failed, result.stats
@@ -91,11 +107,12 @@ def _generate(manager: CrossModuleManager, pid: int, relative: bool = False,
 
 
 def _check(node: Node) -> OracleResult:
-    result = driver.check_oracle(str(node.directory), {node.pid: node.result})
+    result = driver.evaluation.check_oracle(str(node.directory), {node.pid: node.result})
     assert_type(result, OracleResult)
     contracts.oracle_result(result)
+    assert result.inconclusive == {}
     assert not node.directory.exists()
-    assert not (Path(driver.cli_args.test_directory) / 'tmp' / str(node.pid)).exists()
+    assert not (Path(driver.options.test_directory) / 'tmp' / str(node.pid)).exists()
     return result
 
 
@@ -106,9 +123,9 @@ CROSSMODULE_STATS_FIELDS = (
 def _persist(manager: CrossModuleManager, node: Node, result: OracleResult,
              direct: int | None, closure: list[int], command: list[str],
              diff: ManifestDiff | None = None) -> None:
-    assert result[0] == {}
-    assert set(result[3]) == {node.pid}
-    record = result[3][node.pid]
+    assert result.faults == {}
+    assert set(result.publications) == {node.pid}
+    record = result.publications[node.pid]
     assert record['direct'] == direct and record['closure'] == closure
     before = manager.load_ledger()
     assert str(node.pid) not in before
@@ -120,19 +137,19 @@ def _persist(manager: CrossModuleManager, node: Node, result: OracleResult,
     metadata = json.loads((root / 'klibs' / f'd{node.pid}.meta.json').read_text())
     assert metadata == {
         'pid': node.pid, 'command': command,
-        'compiler_version': 'hermetic compiler 1.0', 'backend': driver.cli_args.backend,
+        'compiler_version': 'hermetic compiler 1.0', 'backend': driver.options.backend,
         'flags': [argument for argument in command if argument.startswith('-X')],
         **({'manifest_diff': diff} if diff is not None else {}),
     }
-    driver.update_stats(result, 1, node.result.stats['time'])
+    driver.reporting.update_stats(result, 1, node.result.stats['time'])
     expected = {**before, str(node.pid): {'direct': direct, 'closure': closure}}
     assert manager.load_ledger() == expected
     assert node.pid in manager.provider_candidates(999)
     stats = json.loads((root / 'stats.json').read_text())
     for name in CROSSMODULE_STATS_FIELDS:
-        assert name not in stats and name not in driver.STATS
+        assert name not in stats and name not in driver.reporting.stats
     ledger_bytes = Path(manager.ledger_path()).read_bytes()
-    driver.save_stats()
+    driver.reporting.save_stats()
     assert Path(manager.ledger_path()).read_bytes() == ledger_bytes
     assert not list(root.rglob('*.tmp'))
 
@@ -159,8 +176,9 @@ def _external_publication(manager: CrossModuleManager, pid: int,
     assert node.result.direct_dependency_pid == (closure[0] if closure else None)
     assert node.result.dep_transitive_closure_pids == tuple(closure)
     result = _check(node)
-    assert pid in result[3], 'Successful provider must be published'
-    assert result[3][pid] == {'direct': closure[0] if closure else None, 'closure': closure}
+    assert pid in result.publications, 'Successful provider must be published'
+    assert result.publications[pid] == {
+        'direct': closure[0] if closure else None, 'closure': closure}
     calls = _tool_calls()[-2:]
     assert len(calls) == 2
     command: list[str] = []
@@ -172,10 +190,9 @@ def _external_publication(manager: CrossModuleManager, pid: int,
             assert isinstance(argument, str)
             arguments.append(argument)
         # The executable expands $HOME before the fake tool logs argv.
-        command = KotlinCompiler(str(source), dependency_klibs=_dependencies(manager, closure),
-                                 friend_klibs=_dependencies(manager, closure[:1]),
-                                 module_name=f'd{pid}').get_compiler_cmd()
-        assert_command(command, driver.cli_args.backend, source, f'd{pid}',
+        command = _compiler(source, _dependencies(manager, closure),
+                            _dependencies(manager, closure[:1]), f'd{pid}').get_compiler_cmd()
+        assert_command(command, driver.options.backend, source, f'd{pid}',
                        _dependencies(manager, closure))
         assert arguments == [os.path.expandvars(value) for value in command[1:]]
         assert call['cwd'] == str(node.directory / 'src' / f'd{pid}')
@@ -207,7 +224,7 @@ def chain() -> None:
         assert all(name.startswith(f'src.d{node.pid}.')
                    for name in published.get_current_module_declarations())
         assert published.context.get_decl(ast.GLOBAL_NAMESPACE, f'src.d{node.pid}.hidden') is not None
-    assert driver.STATS['totals'] == {'passed': 3, 'failed': 0}
+    assert driver.reporting.stats['totals'] == {'passed': 3, 'failed': 0, 'inconclusive': 0}
     manager.config.prob.max_module_chain_depth = 2
     assert manager.provider_candidates(999) == [1]
     manager.config.prob.max_module_chain_depth = 3
@@ -218,15 +235,15 @@ def chain() -> None:
 
 def publication_ir() -> None:
     manager = _setup()
-    driver.cli_args.keep_successful = True
-    driver.cli_args.dump_ir = True
+    driver.options.keep_successful = True
+    driver.options.dump_ir = True
     node = _generate(manager, 1)
     dumps = node.directory / 'src/ir'
     dumps.mkdir()
     (dumps / '15_BEFORE.FunctionInlining.ir').write_text('before\noriginal\n')
     (dumps / '15_AFTER.FunctionInlining.ir').write_text('after\ninlined\n')
     events: list[int] = []
-    live = driver.maybe_run_live_jacoco
+    live = driver.coverage.maybe_run_live_jacoco
 
     def after_publication(pid: int, phases: dict[str, int | None] | None) -> None:
         assert pid == 1
@@ -240,11 +257,12 @@ def publication_ir() -> None:
         events.append(pid)
         live(pid, phases)
 
-    with patch.object(driver, 'maybe_run_live_jacoco', after_publication):
+    assert driver.evaluation.coverage is driver.coverage
+    with patch.object(driver.coverage, 'maybe_run_live_jacoco', after_publication):
         result = _check(node)
     assert events == [1]
-    assert result[3] == {1: {'direct': None, 'closure': []}}
-    command = KotlinCompiler(str(node.source), module_name='d1').get_compiler_cmd()
+    assert result.publications == {1: {'direct': None, 'closure': []}}
+    command = _compiler(node.source, module='d1').get_compiler_cmd()
     _persist(manager, node, result, None, [], command)
 
 
@@ -254,9 +272,9 @@ def dependent_crash() -> None:
     node = _generate(manager, 2)
     with patch.dict(os.environ, {'DRIVER_COMPILER_MODE': 'crash'}):
         result = _check(node)
-    assert set(result[0]) == {2}
-    assert result[0][2]['error'] == 'org.jetbrains.kotlin.CompilerException\ncontrolled crash\n'
-    assert result[3] == {}
+    assert set(result.faults) == {2}
+    assert result.faults[2]['error'] == 'org.jetbrains.kotlin.CompilerException\ncontrolled crash\n'
+    assert result.publications == {}
     assert manager.load_ledger() == {'1': {'direct': None, 'closure': []}}
     assert not Path(manager.published_klib_path(2)).exists()
     assert (Path(manager.test_directory) / '2/program.kt').read_bytes() == node.source_bytes
@@ -264,10 +282,11 @@ def dependent_crash() -> None:
 
 def _custom(manager: CrossModuleManager, node: Node, steps: list[CompileStep],
             dependencies: list[str]) -> tuple[OracleResult, Commands]:
-    commands = Commands(node.pid, node.directory, driver.cli_args.backend,
+    commands = Commands(node.pid, node.directory, driver.options.backend,
                         dependencies, steps)
     before = manager.load_ledger()
-    with patch.object(driver, 'run_command', commands):
+    assert driver.evaluation.compilation is driver.compilation
+    with patch.object(driver.compilation, 'run_process', commands):
         result = _check(node)
     commands.finished()
     assert manager.load_ledger() == before
@@ -285,14 +304,14 @@ def _ncp(layout: KlibLayout, provider_error: bool = False) -> None:
                     f'{node.incorrect}:1:1: error: controlled type mismatch'),
         CompileStep(node.source, layout, 'depends=stdlib d1\n', not provider_error),
     ], dependencies)
-    assert result[0] == {}
-    assert result[1] > 0
-    assert result[2][2]['compilation_with_ir_dumps'] == result[1]
+    assert result.faults == {}
+    assert result.compilation_time > 0
+    assert result.time_metrics[2]['compilation_with_ir_dumps'] == result.compilation_time
     if provider_error:
-        assert result[3] == {}
+        assert result.publications == {}
         assert not Path(manager.published_klib_path(2)).exists()
         assert not (Path(manager.test_directory) / '2').exists()
-        driver.update_stats(result, 1, node.result.stats['time'])
+        driver.reporting.update_stats(result, 1, node.result.stats['time'])
         assert manager.load_ledger() == {'1': {'direct': None, 'closure': []}}
     else:
         published_klib = Path(manager.published_klib_path(2))
@@ -346,17 +365,17 @@ def _drop(rejected: bool) -> None:
     assert Path(manager.ledger_path()).read_bytes() == before
     assert Path(manager.published_klib_path(1)).exists()
     if rejected:
-        assert result[3] == {}
-        assert set(result[0]) == {3}
-        assert result[0][3]['error'] == '1:1: missing indirect d1'
-        driver.update_stats(result, 1, node.result.stats['time'])
+        assert result.publications == {}
+        assert set(result.faults) == {3}
+        assert result.faults[3]['error'] == '1:1: missing indirect d1'
+        driver.reporting.update_stats(result, 1, node.result.stats['time'])
         assert Path(manager.ledger_path()).read_bytes() == before
         faults = json.loads((Path(manager.test_directory) / 'faults.json').read_text())
         assert faults['3']['dropped_indirect_deps'] == [1]
         assert (Path(manager.test_directory) / '3/program.kt').read_bytes() == node.source_bytes
         assert not Path(manager.published_klib_path(3)).exists()
     else:
-        assert 'manifest_diff' not in result[3][3]
+        assert 'manifest_diff' not in result.publications[3]
         _persist(manager, node, result, 2, [2, 1], commands.calls[-1])
 
 
@@ -382,7 +401,7 @@ def _manifest(layout: KlibLayout, dropped: bool = False) -> None:
     diff: ManifestDiff = {'manifest_depends': ['d1', 'd2', 'ghost'],
                           'closure': sorted(f'd{pid}' for pid in expected),
                           'unexpected': ['d1', 'ghost'] if dropped else ['ghost']}
-    assert result[3][3].get('manifest_diff') == diff
+    assert result.publications[3].get('manifest_diff') == diff
     assert klib_payload(Path(manager.published_klib_path(3))) == 'isolated'
     _persist(manager, node, result, 2, [2, 1], commands.calls[-1], diff)
     assert 'manifest_diff' not in contracts.record(manager.load_ledger()['3'])
@@ -418,9 +437,9 @@ def _incomplete_publication(kind: str) -> None:
         CompileStep(node.directory / 'src'),
         CompileStep(node.source, 'missing' if kind == 'klib' else 'file'),
     ], [])
-    assert result[0] == result[3] == {}
+    assert result.faults == result.publications == {}
     assert manager.provider_candidates(2) == []
-    driver.update_stats(result, 1, node.result.stats['time'])
+    driver.reporting.update_stats(result, 1, node.result.stats['time'])
     assert manager.load_ledger() == {}
     assert manager.prepare_dependency(2) is None
     assert Path(manager.published_klib_path(1)).exists() == (kind != 'klib')
@@ -517,48 +536,52 @@ def unreadable_manifests() -> None:
 def pid_cache() -> None:
     manager = _setup()
     pid = os.getpid()
-    assert driver.CROSSMODULE_MANAGER_PID == pid
+    assert driver.manager_pid == pid
     assert driver.setup_crossmodule_manager('ignored for same process') is manager
     assert manager.compiler_version == 'hermetic compiler 1.0'
-    with patch.object(driver.os, 'getpid', return_value=pid + 1):
+    with patch.object(os, 'getpid', return_value=pid + 1):
         worker = driver.setup_crossmodule_manager('worker compiler')
         assert type(worker) is CrossModuleManager and worker is not manager
-        assert driver.CROSSMODULE_MANAGER_PID == pid + 1
+        assert driver.manager is worker and driver.manager_pid == pid + 1
+        for component in (driver.generation, driver.evaluation, driver.reporting):
+            assert component.manager is worker
         assert driver.setup_crossmodule_manager('ignored for worker') is worker
         assert worker.compiler_version == 'worker compiler'
-        assert worker.config is driver.cfg
-        assert worker.backend == driver.cli_args.backend
-        assert worker.test_directory == driver.cli_args.test_directory
+        assert worker.config is cfg
+        assert worker.backend == driver.options.backend
+        assert worker.test_directory == driver.options.test_directory
         assert worker.read_manifest_depends is KotlinCompiler.read_manifest_depends
         assert worker.load_program is utils.load_program
     restored = driver.setup_crossmodule_manager('parent again')
     assert restored is not worker and restored is not manager
-    assert driver.CROSSMODULE_MANAGER_PID == pid
+    assert driver.manager is restored and driver.manager_pid == pid
 
 
 def disabled() -> None:
     manager = _setup()
-    driver.cfg.prob.crossmodule_probability = 0.0
+    cfg.prob.crossmodule_probability = 0.0
     node = _generate(manager, 1)
     calls: list[list[str]] = []
 
     def compile_only(arguments: list[str], get_stdout: bool = True,
-                     cwd: str | None = None) -> tuple[bool, str]:
+                     cwd: str | None = None) -> ProcessResult:
         assert get_stdout and cwd is None
-        compiler = KotlinCompiler(str(node.directory / 'src'))
+        compiler = _compiler(node.directory / 'src')
         assert compiler.get_dependency_artifact_filename() is None
         assert arguments == compiler.get_compiler_cmd()
-        assert '-friend-modules' not in arguments and '-Xfriend-modules' not in arguments
+        assert not any(argument in ('-friend-modules', '-Xfriend-modules')
+                       or argument.startswith('-Xfriend-modules=') for argument in arguments)
         assert '-Xir-produce-klib-file' not in arguments
         calls.append(arguments)
-        return True, ''
+        return ProcessResult(0, '')
 
-    with patch.object(driver, 'run_command', compile_only):
+    with patch.object(driver.compilation, 'run_process', compile_only):
         result = _check(node)
     assert len(calls) == 1
-    assert result[0] == result[3] == {}
-    driver.update_stats(result, 1, node.result.stats['time'])
+    assert result.faults == result.publications == {}
+    driver.reporting.update_stats(result, 1, node.result.stats['time'])
     assert not Path(manager.ledger_path()).exists()
     assert not Path(manager.published_klibs_dir()).exists()
     assert manager.publish_program(1) is None
-    assert 'crossmodule' not in driver.STATS
+    assert 'crossmodule' not in driver.reporting.stats
+    assert driver.reporting.stats['totals'] == {'passed': 1, 'failed': 0, 'inconclusive': 0}

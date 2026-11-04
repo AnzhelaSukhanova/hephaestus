@@ -93,9 +93,8 @@ def test_groovy_stack_overflow_without_diagnostic_is_crash():
 def test_kotlin_phase_enrichment_and_commands(monkeypatch):
     kotlin_module = _load_kotlin_compiler(monkeypatch)
     compiler = kotlin_module.KotlinCompiler("src")
-    kotlin_command = kotlin_module.compiler
-    is_native = kotlin_module.is_native
-    from src.args import args as cli_args
+    kotlin_command = kotlin_module._compiler_executable(compiler.settings)
+    is_native = compiler.settings.backend == "native"
     expected_command = ([kotlin_command, "src",
                          "-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath",
                          "-produce", "library", "-o",
@@ -108,7 +107,7 @@ def test_kotlin_phase_enrichment_and_commands(monkeypatch):
                           compiler.stdlib_path(), "-nowarn",
                          "-Xklib-ir-inliner=full"])
     dump_flags = (["-Xphases-to-dump=" + compiler.IR_MODIFYING_INLINER_PHASES,
-                   "-Xdump-directory=src/ir"] if cli_args.dump_ir else [])
+                   "-Xdump-directory=src/ir"] if compiler.settings.dump_ir else [])
 
     assert compiler.get_compiler_cmd() == expected_command + dump_flags
     assert compiler.get_error_enrichment_cmds("Main.kt") == {

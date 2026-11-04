@@ -4,13 +4,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, assert_type
+from typing import assert_type
 
+from src import utils
+from src.generators.config import cfg
+from src.modules.models import OracleResult, ProgramRes
 from tests.driver import contracts
 from tests.driver.support import assert_arguments, load_driver
-
-if TYPE_CHECKING:
-    from hephaestus import OracleResult, ProgramRes
 
 
 class OracleDefect(AssertionError):
@@ -50,7 +50,7 @@ class Batch:
 
     def __post_init__(self) -> None:
         driver = load_driver()
-        assert driver.cfg.prob.crossmodule_probability == 0
+        assert cfg.prob.crossmodule_probability == 0
         driver.setup_crossmodule_manager('hermetic compiler 1.0')
         (self.directory / 'src').mkdir(parents=True)
 
@@ -63,15 +63,15 @@ class Batch:
         source = self.directory / 'src' / f'd{pid}{"" if expected else "_incorrect"}' / 'program.kt'
         source.parent.mkdir(parents=True)
         program = replay(Path(str(source) + '.bin'))
-        text = driver.utils.translate_program(KotlinTranslator(), program)
+        text = utils.translate_program(KotlinTranslator(), program)
         source.write_text(text)
-        temporary = Path(driver.cli_args.test_directory) / 'tmp' / str(pid)
+        temporary = Path(driver.options.test_directory) / 'tmp' / str(pid)
         temporary.mkdir(parents=True, exist_ok=True)
         saved = temporary / ('program.kt' if expected else 'incorrect.kt')
         saved.write_text(text)
-        driver.utils.dump_program(str(saved) + '.bin', program)
+        utils.dump_program(str(saved) + '.bin', program)
         if pid not in self.oracles:
-            self.oracles[pid] = driver.ProgramRes(False, {
+            self.oracles[pid] = ProgramRes(False, {
                 'transformations': [], 'error': error,
                 'programs': {}, 'time': 0.125,
             })
@@ -81,21 +81,19 @@ class Batch:
         return str(source)
 
     def check(self) -> OracleResult:
-        from hephaestus import OracleResult
-
         driver = load_driver()
-        result = driver.check_oracle(str(self.directory), self.oracles)
+        result = driver.evaluation.check_oracle(str(self.directory), self.oracles)
         assert_type(result, OracleResult)
         contracts.oracle_result(result)
-        assert result[3] == {}
+        assert result.publications == {}
         return result
 
     def preserved(self, pid: int, expected: bool) -> None:
         driver = load_driver()
-        saved = Path(driver.cli_args.test_directory) / str(pid)
+        saved = Path(driver.options.test_directory) / str(pid)
         source = saved / ('program.kt' if expected else 'incorrect.kt')
         assert source.is_file()
-        contracts.program(driver.utils.load_program(str(source) + '.bin'))
+        contracts.program(utils.load_program(str(source) + '.bin'))
 
 
 def diagnostic(source: str, message: str, line: int = 1,
