@@ -29,7 +29,7 @@ Examples:
   ./run-native-crossmodule.sh --print-command
 
 Additional options are forwarded last, overriding corresponding CLI defaults.
-Keep --backend native, --batch 1 and --keep-everything for this workflow.
+Keep --backend native, --batch 1 and --keep-successful for this workflow.
 No JaCoCo flags, jar downloads, instrumented recompilations or coverage reports.
 Programs and dependency KLIBs are saved under bugs/<name>/.
 Full CLI help: .venv/bin/python hephaestus.py --help
@@ -50,7 +50,7 @@ COMMAND=(
     --language kotlin -P --backend native
     --iterations "${ITERATIONS:-1000000}" --workers "${WORKERS:-8}" --batch 1
     --generator-config "${GENERATOR_CONFIG:-$ROOT/config_1.53x.json}"
-    --disable-reified-type-parameters --keep-everything --time-metrics
+    --disable-reified-type-parameters --keep-successful --time-metrics
     --name "$NAME"
     "$@"
 )

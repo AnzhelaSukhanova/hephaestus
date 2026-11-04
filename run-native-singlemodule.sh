@@ -31,7 +31,7 @@ Examples:
   ./run-native-singlemodule.sh --print-command
 
 Additional options are forwarded last, overriding corresponding CLI defaults.
-Keep --backend native, --batch 1 and --keep-everything for this workflow.
+Keep --backend native, --batch 1 and --keep-successful for this workflow.
 Custom generator configurations must set prob.crossmodule_probability to 0.
 No JaCoCo flags, jar downloads, instrumented recompilations or coverage reports.
 Programs, stats.json and time_metrics.json are saved under bugs/<name>/.
@@ -53,7 +53,7 @@ COMMAND=(
     --language kotlin -P --backend native
     --iterations "${ITERATIONS:-1000000}" --workers "${WORKERS:-8}" --batch 1
     --generator-config "${GENERATOR_CONFIG:-$ROOT/config_1.53x_singlemodule.json}"
-    --disable-reified-type-parameters --keep-everything --time-metrics
+    --disable-reified-type-parameters --keep-successful --time-metrics
     --name "$NAME"
     "$@"
 )

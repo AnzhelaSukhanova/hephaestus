@@ -62,7 +62,7 @@ COMMAND=(
     --language kotlin -P --oracle backend-comparison
     --iterations "${ITERATIONS:-1000000}" --workers "${WORKERS:-8}" --batch 1
     --generator-config "${GENERATOR_CONFIG:-$ROOT/config_1.53x.json}"
-    --disable-reified-type-parameters --keep-everything --time-metrics
+    --disable-reified-type-parameters --keep-successful --time-metrics
     --name "$NAME"
     "$@"
 )
