@@ -54,7 +54,7 @@ indicates a potential soundness bug in the compiler under test.
 
 # Requirements
 
-* Python: 3.8+
+* Python: 3.12
 
 # Getting Started
 
@@ -62,12 +62,14 @@ indicates a potential soundness bug in the compiler under test.
 
 ```
 ./hephaestus.py --help
-usage: hephaestus.py [-h] [-s SECONDS] [-i ITERATIONS] [-t TRANSFORMATIONS] [--batch BATCH] [-b BUGS] [-n NAME] [-T [{TypeErasure} [{TypeErasure} ...]]]
-                     [--transformation-schedule TRANSFORMATION_SCHEDULE] [-R REPLAY] [-e] [-k] [-S] [-w WORKERS] [-d] [-r] [-F LOG_FILE] [-L] [-N] [--language {kotlin,groovy,java}]
-                     [--max-type-params MAX_TYPE_PARAMS] [--max-depth MAX_DEPTH] [-P] [--timeout TIMEOUT] [--cast-numbers] [--disable-use-site-variance] [--disable-contravariance-use-site]
-                     [--disable-bounded-type-parameters] [--disable-parameterized-functions]
+usage: hephaestus.py [-h] [-s SECONDS] [-i ITERATIONS] [-t TRANSFORMATIONS] [--batch BATCH] [-b BUGS] [-n NAME] [-T [{TypeErasure} ...]] [--transformation-schedule TRANSFORMATION_SCHEDULE]
+                     [-R REPLAY] [-e] [-k] [--keep-successful] [-S] [-w WORKERS] [-d] [-r] [-F LOG_FILE] [-L] [-N] [--language {kotlin,groovy,java,scala}] [--backend {native,js,wasm,jvm}]
+                     [--oracle {compilation,backend-comparison,inlining-comparison}] [--max-type-params MAX_TYPE_PARAMS] [--max-depth MAX_DEPTH] [--inline-default-depth INLINE_DEFAULT_DEPTH]
+                     [--generator-config GENERATOR_CONFIG] [-P] [--timeout TIMEOUT] [--cast-numbers] [--disable-use-site-variance] [--disable-contravariance-use-site]
+                     [--disable-bounded-type-parameters] [--disable-parameterized-functions] [--disable-reified-type-parameters] [--error-filter-patterns ERROR_FILTER_PATTERNS] [--dump-ir]
+                     [--time-metrics] [--disable-metrics] [--jacoco-lowerings JACOCO_LOWERINGS [JACOCO_LOWERINGS ...]] [--jacoco-always]
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -s SECONDS, --seconds SECONDS
                         Timeout in seconds
@@ -78,7 +80,7 @@ optional arguments:
   --batch BATCH         Number of programs to generate before invoking the compiler
   -b BUGS, --bugs BUGS  Set bug directory (default: /home/hephaestus/bugs)
   -n NAME, --name NAME  Set name of this testing instance (default: random string)
-  -T [{TypeErasure} [{TypeErasure} ...]], --transformation-types [{TypeErasure} [{TypeErasure} ...]]
+  -T [{TypeErasure} ...], --transformation-types [{TypeErasure} ...]
                         Select specific transformations to perform
   --transformation-schedule TRANSFORMATION_SCHEDULE
                         A file containing the schedule of transformations
@@ -86,6 +88,7 @@ optional arguments:
                         Give a program to use instead of a randomly generated (pickled)
   -e, --examine         Open ipdb for a program (can be used only with --replay option)
   -k, --keep-all        Save all programs
+  --keep-successful     Preserve final per-program directories (bugs/<name>/<pid>/) for passed programs too
   -S, --print-stacktrace
                         When an error occurs print stack trace
   -w WORKERS, --workers WORKERS
@@ -96,12 +99,20 @@ optional arguments:
                         Set log file (default: /home/hephaestus/logs)
   -L, --log             Keep logs for each transformation (bugs/session/logs)
   -N, --dry-run         Do not compile the programs
-  --language {kotlin,groovy,java}
+  --language {kotlin,groovy,java,scala}
                         Select specific language
+  --backend {native,js,wasm,jvm}
+                        Select Kotlin backend
+  --oracle {compilation,backend-comparison,inlining-comparison}
+                        Compilation expectations, Kotlin JS/Native/Wasm (KLIB) and JVM (linked JAR) agreement, or agreement of one KLIB backend with the IR inliner disabled and cross-module
   --max-type-params MAX_TYPE_PARAMS
                         Maximum number of type parameters to generate
   --max-depth MAX_DEPTH
                         Generate programs up to the given depth
+  --inline-default-depth INLINE_DEFAULT_DEPTH
+                        Non-leaf levels allowed inside parameter default values (0 = leaf-only defaults)
+  --generator-config GENERATOR_CONFIG
+                        Path to a JSON file overriding generator configuration values
   -P, --only-correctness-preserving-transformations
                         Use only correctness-preserving transformations
   --timeout TIMEOUT     Timeout for transformations (in seconds)
@@ -116,6 +127,16 @@ optional arguments:
                         Disable parameterized functions
   --disable-reified-type-parameters
                         Disable reified type parameters
+  --error-filter-patterns ERROR_FILTER_PATTERNS
+                        A file containing regular expressions for filtering compiler error messages
+  --dump-ir             Dump compiler IR for each saved program
+  --time-metrics        Record per-program generation, compilation, and profiling timings
+  --disable-metrics     Disable compiler error enrichment, phase profiling, and escalation reports; --time-metrics output is still recorded when requested
+  --jacoco-lowerings JACOCO_LOWERINGS [JACOCO_LOWERINGS ...]
+                        Compile a program with the JaCoCo agent immediately (instead of via the offline src.tools.ir_coverage tool) whenever its IR changed in one of these lowering phases,
+                        refreshing the merged coverage report after every such program. Requires --dump-ir and --keep-successful; safe to combine with --workers.
+  --jacoco-always       Like --jacoco-lowerings, but skip the IR-changed check and compile with the JaCoCo agent for every preserved program. Requires --keep-successful; mutually exclusive
+                        with --jacoco-lowerings.
 
 ```
 
