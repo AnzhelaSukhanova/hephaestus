@@ -72,10 +72,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Save all programs"
     )
     parser.add_argument(
-        "--keep-everything",
+        "--keep-successful",
         action="store_true",
-        help=("Save generator/transformation artifacts and preserve final "
-              "per-program directories for passed programs too")
+        help=("Preserve final per-program directories (bugs/<name>/<pid>/) "
+              "for passed programs too")
     )
     parser.add_argument(
         "-S", "--print-stacktrace",
@@ -230,14 +230,14 @@ def build_parser() -> argparse.ArgumentParser:
               "via the offline src.tools.ir_coverage tool) whenever its IR "
               "changed in one of these lowering phases, refreshing the merged "
               "coverage report after every such program. Requires --dump-ir "
-              "and --keep-everything; safe to combine with --workers.")
+              "and --keep-successful; safe to combine with --workers.")
     )
     parser.add_argument(
         "--jacoco-always",
         action="store_true",
         help=("Like --jacoco-lowerings, but skip the IR-changed check and "
               "compile with the JaCoCo agent for every preserved program. "
-              "Requires --keep-everything; mutually exclusive with "
+              "Requires --keep-successful; mutually exclusive with "
               "--jacoco-lowerings.")
     )
     return parser
@@ -245,8 +245,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = build_parser().parse_args(argv)
-    if args.keep_everything:
-        args.keep_all = True
     args.test_directory = os.path.join(args.bugs, args.name)
     args.stop_cond = "timeout" if args.seconds else "iterations"
     args.temp_directory = os.path.join(os.getcwd(), "temp")
@@ -324,8 +322,9 @@ def validate_args(args):
     if cfg.prob.crossmodule_probability > 0:
         if args.language != "kotlin":
             sys.exit("Error: cross-module generation is supported only for Kotlin")
-        if not args.keep_all:
-            sys.exit("Error: cross-module generation requires --keep-all to accumulate .klib's")
+        if not (args.keep_successful or args.keep_all):
+            sys.exit("Error: cross-module generation requires --keep-successful or --keep-all "
+                     "to accumulate .klib's")
         if args.batch != 1:
             sys.exit("Error: cross-module generation requires --batch 1, as batches compile same module")
 
@@ -378,15 +377,15 @@ def validate_args(args):
     if args.jacoco_lowerings and not args.dump_ir:
         sys.exit("The --jacoco-lowerings option requires --dump-ir")
 
-    if args.jacoco_lowerings and not args.keep_everything:
-        sys.exit("The --jacoco-lowerings option requires --keep-everything")
+    if args.jacoco_lowerings and not args.keep_successful:
+        sys.exit("The --jacoco-lowerings option requires --keep-successful")
 
     if args.jacoco_lowerings and args.jacoco_always:
         sys.exit("Options --jacoco-lowerings and --jacoco-always are "
                  "mutually exclusive. You can't use both.")
 
-    if args.jacoco_always and not args.keep_everything:
-        sys.exit("The --jacoco-always option requires --keep-everything")
+    if args.jacoco_always and not args.keep_successful:
+        sys.exit("The --jacoco-always option requires --keep-successful")
 
 
 def pre_process_args(args):
