@@ -220,7 +220,7 @@ class VariantComparisonMode:
                 proc_res.stats, self.name, 'comparison_incomplete',
                 '; '.join(comparison.incomplete_reasons))
         record = faults.get(pid) or inconclusive.get(pid)
-        if faults or inconclusive or evaluation.options.keep_everything:
+        if faults or inconclusive or evaluation.options.keep_successful:
             with evaluation._secondary_operation(pid, 'preserve_comparison', record):
                 evaluation.artifacts.preserve_comparison(
                     pid, requests, variants, proc_res.stats['comparison'],
