@@ -64,7 +64,13 @@ class Artifacts:
             self, pid: int, requests: Sequence[CompilationRequest[KotlinSettings]],
             observations: Sequence[VariantObservation[KotlinSettings]], comparison: dict,
             dependencies: ComparisonDependencies,
-            manager: CrossModuleManager, versions_by_variant: Mapping[str, str]) -> None:
+            manager: CrossModuleManager, versions_by_variant: Mapping[str, str],
+            published: bool = False) -> None:
+        """Retain a comparison case.
+
+        Variant artifacts are never copied: a published bundle's variants
+        reference their artifacts in klibs/, and unpublished ones keep none.
+        """
         target = os.path.join(self.options.test_directory, 'tmp', str(pid))
         utils.mkdir(target)
         source = os.path.join(target, 'program.kt')
@@ -73,8 +79,9 @@ class Artifacts:
         available, published_paths = self._published_dependencies(
             case_directory, dependencies, requests, manager)
         for request, variant in zip(requests, observations):
-            self._variant_record(pid, target, request, variant,
-                                 published_paths, manager, versions_by_variant)
+            self._variant_record(pid, target, request, variant, published_paths,
+                                 manager, versions_by_variant,
+                                 case_directory if published else None)
         with open(os.path.join(target, 'comparison.json'), 'w') as out:
             json.dump({'source': os.path.basename(source), 'comparison': comparison,
                        'dependencies': asdict(dependencies),
@@ -128,7 +135,8 @@ class Artifacts:
     def _variant_record(
             self, pid: int, target: str, request: CompilationRequest[KotlinSettings],
             variant: VariantObservation[KotlinSettings], published_paths: Mapping[str, str],
-            manager: CrossModuleManager, versions_by_variant: Mapping[str, str]) -> None:
+            manager: CrossModuleManager, versions_by_variant: Mapping[str, str],
+            published_case_directory: str | None = None) -> None:
         variant_id = request.variant_id
         settings = variant.settings
         artifact = manager.variant_publication(pid, variant_id)
@@ -161,18 +169,14 @@ class Artifacts:
             'artifact_valid': variant.dependency_artifact_valid,
             'incomplete_reason': variant.incomplete_reason,
             'expected_klib': request.expected_dependency_artifact_path,
+            'published_klib': os.path.relpath(
+                manager.published_klib_path(pid, variant_id), published_case_directory)
+            if published_case_directory is not None else None,
         }
         with open(os.path.join(directory, 'result.json'), 'w') as out:
             json.dump(result, out, indent=2)
         with open(os.path.join(directory, 'output.txt'), 'w') as out:
             out.write(str(command.output) if command else variant.incomplete_reason or '')
-        dependency_artifact = variant.produced_dependency_artifact_path
-        if dependency_artifact and os.path.exists(dependency_artifact):
-            destination = os.path.join(directory, os.path.basename(dependency_artifact))
-            if os.path.isdir(dependency_artifact):
-                shutil.copytree(dependency_artifact, destination, dirs_exist_ok=True)
-            else:
-                shutil.copy2(dependency_artifact, destination)
 
     def preserve_ir_changes_to_tmp(self, dirname: str, pid: int
                                    ) -> dict[str, int | None] | None:
