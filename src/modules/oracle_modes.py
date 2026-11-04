@@ -224,7 +224,8 @@ class VariantComparisonMode:
             with evaluation._secondary_operation(pid, 'preserve_comparison', record):
                 evaluation.artifacts.preserve_comparison(
                     pid, requests, variants, proc_res.stats['comparison'],
-                    dependencies, manager, evaluation.compilation.versions_by_variant)
+                    dependencies, manager, evaluation.compilation.versions_by_variant,
+                    published=pid in publications)
             with evaluation._secondary_operation(pid, 'preserve_program_directory', record):
                 evaluation.artifacts.preserve_final_program_dir(pid)
         with evaluation._secondary_operation(pid, 'cleanup_program_artifacts', record):
