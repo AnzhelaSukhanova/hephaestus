@@ -218,7 +218,7 @@ def chain() -> None:
 
 def publication_ir() -> None:
     manager = _setup()
-    driver.cli_args.keep_everything = True
+    driver.cli_args.keep_successful = True
     driver.cli_args.dump_ir = True
     node = _generate(manager, 1)
     dumps = node.directory / 'src/ir'

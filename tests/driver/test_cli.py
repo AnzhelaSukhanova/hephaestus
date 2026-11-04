@@ -58,7 +58,7 @@ def test_help_exits_before_running_driver(tmp_path: Path, argument: str) -> None
     result = _launch(tmp_path, "basic", [argument])
     _assert_success(result)
     assert "usage:" in result.stdout
-    for option in ("--generator-config", "--workers", "--keep-everything",
+    for option in ("--generator-config", "--workers", "--keep-successful",
                    "--time-metrics", "--jacoco-lowerings", "--jacoco-always"):
         assert option in result.stdout
     assert not (tmp_path / "bugs").exists()
@@ -74,6 +74,7 @@ def test_help_exits_before_running_driver(tmp_path: Path, argument: str) -> None
     (["--generator-config"], "expected one argument"),
     (["--jacoco-lowerings"], "expected at least one argument"),
     (["--unknown-driver-option"], "unrecognized arguments: --unknown-driver-option"),
+    (["--keep-everything"], "unrecognized arguments: --keep-everything"),
 ])
 def test_parser_rejects_invalid_arguments(
         tmp_path: Path, arguments: list[str], message: str) -> None:
@@ -100,11 +101,11 @@ def test_parser_rejects_invalid_arguments(
     (["--jacoco-lowerings", "FunctionInlining"],
      "The --jacoco-lowerings option requires --dump-ir"),
     (["--jacoco-lowerings", "FunctionInlining", "--dump-ir"],
-     "The --jacoco-lowerings option requires --keep-everything"),
-    (["--jacoco-lowerings", "FunctionInlining", "--dump-ir", "--keep-everything",
+     "The --jacoco-lowerings option requires --keep-successful"),
+    (["--jacoco-lowerings", "FunctionInlining", "--dump-ir", "--keep-successful",
       "--jacoco-always"],
      "Options --jacoco-lowerings and --jacoco-always are mutually exclusive"),
-    (["--jacoco-always"], "The --jacoco-always option requires --keep-everything"),
+    (["--jacoco-always"], "The --jacoco-always option requires --keep-successful"),
 ])
 def test_validation_rejects_incompatible_arguments(
         tmp_path: Path, arguments: list[str], message: str) -> None:
@@ -136,8 +137,8 @@ def test_validation_rejects_existing_session(tmp_path: Path) -> None:
     ["--seconds", "3", "--iterations", "0"],
     ["--rerun", "--keep-all", "--batch", "0"],
     ["--examine", "--replay", "program.bin"],
-    ["--dump-ir", "--keep-everything", "--jacoco-lowerings", "FunctionInlining"],
-    ["--keep-everything", "--jacoco-always"],
+    ["--dump-ir", "--keep-successful", "--jacoco-lowerings", "FunctionInlining"],
+    ["--keep-successful", "--jacoco-always"],
     ["--time-metrics", "--disable-metrics"],
 ])
 def test_validation_accepts_supported_combinations(
@@ -156,7 +157,7 @@ def test_validation_accepts_existing_transformation_schedule(tmp_path: Path) -> 
 @pytest.mark.parametrize(("arguments", "message"), [
     (["--language", "java", "--keep-all"],
      "cross-module generation is supported only for Kotlin"),
-    ([], "cross-module generation requires --keep-all"),
+    ([], "cross-module generation requires --keep-successful or --keep-all"),
     (["--keep-all", "--batch", "2"], "cross-module generation requires --batch 1"),
     (["--keep-all", "--replay", "program.bin"],
      "cross-module generation does not support --replay"),
@@ -172,11 +173,13 @@ def test_validation_rejects_crossmodule_conflicts(
     ]), message)
 
 
-def test_validation_accepts_crossmodule_with_preservation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("preservation", ["--keep-all", "--keep-successful"])
+def test_validation_accepts_crossmodule_with_preservation(
+        tmp_path: Path, preservation: str) -> None:
     config = tmp_path / "crossmodule.json"
     config.write_text('{"prob": {"crossmodule_probability": 0.5}}', encoding="utf-8")
     _assert_success(_launch(tmp_path, "validate", [
-        "--generator-config", str(config), "--keep-all",
+        "--generator-config", str(config), preservation,
     ]))
 
 
@@ -213,7 +216,7 @@ def test_cli_flags_override_configuration_and_populate_options(tmp_path: Path) -
         "--max-depth", "0", "--max-type-params", "0", "--inline-default-depth", "0",
         "--disable-use-site-variance", "--disable-contravariance-use-site",
         "--disable-bounded-type-parameters", "--disable-parameterized-functions",
-        "--disable-reified-type-parameters", "--keep-everything",
+        "--disable-reified-type-parameters", "--keep-successful",
         "--time-metrics", "--disable-metrics", "--dump-ir", "--dry-run",
         "--log", "--print-stacktrace", "--cast-numbers", "--timeout", "17",
         "--seconds", "30", "--iterations", "0", "--backend", "js",

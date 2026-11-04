@@ -20,7 +20,7 @@ def test_worker_equivalence(method: str, mode: str, dry_run: bool,
         root = Path(directory)
         source = root / 'input.bin'
         replay(source)
-        arguments = ['--replay', str(source), '--iterations', '3', '--keep-everything',
+        arguments = ['--replay', str(source), '--iterations', '3', '--keep-successful',
                      '--disable-metrics']
         if dry_run:
             arguments.append('--dry-run')

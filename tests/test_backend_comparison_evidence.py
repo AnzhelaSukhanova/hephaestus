@@ -89,11 +89,11 @@ def test_reporting_json_default_serializes_comparison_dependencies():
         json.dumps(object(), default=_json_default)
 
 
-@pytest.mark.parametrize('keep_everything,disable_metrics', [(False, False), (True, True)])
+@pytest.mark.parametrize('keep_successful,disable_metrics', [(False, False), (True, True)])
 def test_fault_evidence_includes_all_attempts_even_without_metrics(
-        tmp_path, monkeypatch, keep_everything, disable_metrics):
+        tmp_path, monkeypatch, keep_successful, disable_metrics):
     app = configured_application(tmp_path, monkeypatch)
-    app.options.keep_everything = keep_everything
+    app.options.keep_successful = keep_successful
     app.options.disable_metrics = disable_metrics
     rejecting_tool(app)
     directory, program = case(app, tmp_path, 1)
@@ -258,7 +258,7 @@ def test_replayed_program_runs_through_preflight_and_four_variants(tmp_path, mon
     monkeypatch.setattr(cfg.prob, 'crossmodule_probability', 0)
     source = tmp_path / 'input.bin'
     replay(source)
-    app = application(tmp_path, ('-R', str(source), '--keep-everything',
+    app = application(tmp_path, ('-R', str(source), '--keep-successful',
                                 '--time-metrics', '--disable-metrics'))
     tool = fixture_tool(tmp_path)
     library = tmp_path / 'stdlib'

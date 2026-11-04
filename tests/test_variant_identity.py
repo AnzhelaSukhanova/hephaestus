@@ -132,7 +132,7 @@ def custom_crossmodule_application(tmp_path, monkeypatch):
     app.compilation.settings_by_variant = settings
     app.compilation.versions_by_variant = versions
     manager = app.setup_crossmodule_manager('Kotlin compiler 2.4.255-SNAPSHOT')
-    app.options.keep_everything = True
+    app.options.keep_successful = True
     return app, settings, manager
 
 

@@ -77,19 +77,19 @@ CROSSMODULE_STATS_FIELDS = {
     'crossmodule', 'crossmodule_manifest_diff', 'crossmodule_variant_manifest_diff'}
 
 
-@pytest.mark.parametrize('keep_everything', [False, True])
+@pytest.mark.parametrize('keep_successful', [False, True])
 def test_standalone_agreement_only_retains_artifacts_when_requested(
-        tmp_path, monkeypatch, keep_everything):
+        tmp_path, monkeypatch, keep_successful):
     app = configured_application(tmp_path, monkeypatch)
     monkeypatch.setattr(cfg.prob, 'crossmodule_probability', 0)
-    app.options.keep_everything = keep_everything
+    app.options.keep_successful = keep_successful
     directory, program = case(app, tmp_path, 1)
 
     result = app.evaluation.check_oracle(directory, {1: program})
 
     assert not result.faults and not result.inconclusive and not result.publications
     retained = Path(app.options.test_directory) / '1'
-    assert (retained / 'program.kt').exists() is keep_everything
+    assert (retained / 'program.kt').exists() is keep_successful
     assert not (Path(app.options.test_directory) / 'klibs').exists()
 
 

@@ -191,7 +191,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     hephaestus.timed = timed
     hephaestus.cfg.prob.crossmodule_probability = 0.5
     hephaestus.cli_args.language = "kotlin"
-    hephaestus.cli_args.keep_everything = False
+    hephaestus.cli_args.keep_successful = False
     hephaestus.cli_args.time_metrics = False
     hephaestus.cli_args.debug = False
     hephaestus.cli_args.rerun = False

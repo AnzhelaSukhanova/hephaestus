@@ -27,7 +27,7 @@ def record_arguments(tool: Mapping[object, object]) -> list[str]:
 
 
 @pytest.mark.parametrize('scenario', ['script', 'reject', 'crash'])
-@pytest.mark.parametrize('retention', ['', '--keep-all', '--keep-everything'])
+@pytest.mark.parametrize('retention', ['', '--keep-all', '--keep-successful'])
 @pytest.mark.parametrize('dry_run', [False, True])
 def test_script_artifacts(tmp_path: Path, scenario: str,
                           retention: str, dry_run: bool) -> None:
@@ -59,8 +59,9 @@ def test_script_artifacts(tmp_path: Path, scenario: str,
     assert json.loads((root / 'inconclusive.json').read_text()) == {}
     assert not (root / 'tmp').exists()
     assert not (root / 'escalations.json').exists()
-    assert (root / 'generator/iter_1/program.kt').exists() == bool(retention)
-    preserved = failed or (retention == '--keep-everything' and not dry_run)
+    assert (root / 'generator/iter_1/program.kt').exists() == (retention == '--keep-all')
+    assert (root / 'generator').exists() == (retention == '--keep-all')
+    preserved = failed or (retention == '--keep-successful' and not dry_run)
     assert (root / '1/program.kt').exists() == preserved
     if preserved:
         loaded = program(utils.load_program(str(root / '1/program.kt.bin')))
@@ -157,7 +158,7 @@ def test_script_expected_rejection(tmp_path: Path) -> None:
         source = workspace / 'replay.bin'
         replay(source, 'java')
         result = launch('tests.driver.scenarios_script.expected_rejection', workspace,
-                        ['--language', 'java', '--replay', str(source), '--keep-everything'])
+                        ['--language', 'java', '--replay', str(source), '--keep-successful'])
         assert_success(result)
         root = workspace / 'bugs/session'
         stats = record(json.loads((root / 'stats.json').read_text()))
@@ -181,7 +182,7 @@ def test_expected_rejection_with_hyphenated_path(tmp_path: Path) -> None:
     source = workspace / 'replay.bin'
     replay(source, 'java')
     assert_success(launch('tests.driver.scenarios_script.expected_rejection', workspace,
-                          ['--language', 'java', '--replay', str(source), '--keep-everything']))
+                          ['--language', 'java', '--replay', str(source), '--keep-successful']))
     root = workspace / 'bugs/session'
     faults = record(json.loads((root / 'faults.json').read_text()))
     if faults:

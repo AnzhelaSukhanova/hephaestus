@@ -44,8 +44,8 @@ def logged_commands(log):
 
 @pytest.mark.parametrize('extra', [
     ['--dump-ir'],
-    ['--dump-ir', '--keep-everything', '--jacoco-lowerings', 'FunctionInlining'],
-    ['--keep-everything', '--jacoco-always'],
+    ['--dump-ir', '--keep-successful', '--jacoco-lowerings', 'FunctionInlining'],
+    ['--keep-successful', '--jacoco-always'],
 ])
 def test_jvm_rejects_ir_dumps_and_live_jacoco(tmp_path, monkeypatch, extra):
     monkeypatch.setattr(cfg.prob, 'crossmodule_probability', 0)

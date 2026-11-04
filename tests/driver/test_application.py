@@ -336,7 +336,7 @@ def test_script_runs_replay_with_real_workers(tmp_path: Path, workers: int | Non
     environment['DRIVER_COMPILER_MODE'] = 'success'
     command = [sys.executable, str(ROOT / 'hephaestus.py'), '--language', 'java',
                '-P', '-i', '2', '-t', '0', '--replay', str(source),
-               '--keep-everything', '-b', str(tmp_path / 'bugs'), '-n', 'session',
+               '--keep-successful', '-b', str(tmp_path / 'bugs'), '-n', 'session',
                '-F', str(tmp_path / 'run.log')]
     if workers is not None:
         command += ['--workers', str(workers)]
@@ -349,6 +349,8 @@ def test_script_runs_replay_with_real_workers(tmp_path: Path, workers: int | Non
     assert stats['Info']['compiler'] == 'hermetic compiler 1.0'
     assert json.loads((run / 'faults.json').read_text()) == {}
     assert not (run / 'tmp').exists()
+    assert not (run / 'generator').exists()
+    assert not (run / 'transformations').exists()
     for pid in (1, 2):
         assert (run / str(pid) / 'Main.java').is_file()
         assert (run / str(pid) / 'Main.java.bin').is_file()

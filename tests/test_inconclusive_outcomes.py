@@ -125,7 +125,7 @@ def options_for(run_dir, *, language='kotlin', dry_run=False):
     return SimpleNamespace(
         language=language, error_filter_patterns='', test_directory=str(run_dir),
         debug=False, disable_metrics=True, time_metrics=False, rerun=False,
-        transformations=0, keep_everything=False, dump_ir=False,
+        transformations=0, keep_successful=False, dump_ir=False,
         print_stacktrace=False, dry_run=dry_run, stop_cond='iterations',
         seconds=0, iterations=2, batch=2, workers=2, oracle='compilation',
         transformation_types=[], bugs=str(run_dir.parent), name='test',
@@ -447,7 +447,7 @@ def test_provider_live_coverage_failure_keeps_primary_pass(tmp_path, monkeypatch
         'programs': {program: True}, 'error': None, 'time': 0.1,
     })
     options = options_for(tmp_path / 'run')
-    options.keep_everything = True
+    options.keep_successful = True
     evaluation, compilation, _, coverage, _ = make_evaluation(
         tmp_path / 'run', options=options)
     evaluation.manager = ManagerStub()

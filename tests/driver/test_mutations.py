@@ -31,7 +31,7 @@ MUTATIONS = [
              'friend_paths.extend(klibs)', 'scenarios_crossmodule.chain', ('--disable-metrics',)),
     Mutation('worker_callback_dropped', 'callback=update)', 'callback=None)',
              'scenarios_workers.spawn', ('--workers', '2', '--iterations', '3',
-                                          '--keep-everything', '--disable-metrics')),
+                                          '--keep-successful', '--disable-metrics')),
 ]
 
 

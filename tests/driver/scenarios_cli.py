@@ -53,7 +53,7 @@ def defaults() -> None:
     assert args.workers is None
     assert not args.debug
     assert not args.keep_all
-    assert not args.keep_everything
+    assert not args.keep_successful
     assert not args.disable_metrics
     assert not args.time_metrics
     assert args.only_correctness_preserving_transformations
@@ -107,7 +107,7 @@ def configuration_flags() -> None:
     assert driver.cfg.prob.bounded_type_parameters == 0
     assert driver.cfg.prob.parameterized_functions == 0
     assert driver.cfg.prob.reified_type_parameters == 0
-    assert args.keep_everything and args.keep_all
+    assert args.keep_successful and not args.keep_all
     assert args.time_metrics and args.disable_metrics and args.dump_ir
     assert args.dry_run and args.log and args.print_stacktrace
     assert args.seconds == 30 and args.iterations == 0
