@@ -488,7 +488,7 @@ class Evaluation[S]:
                     time_metrics[pid]["compilation_with_ir_dumps"] += \
                         provider_compilation_time
                 provider_phase_changes = None
-                if provider is not None and self.options.keep_everything:
+                if provider is not None and self.options.keep_successful:
                     with self._secondary_operation(pid, 'preserve_ir_changes'):
                         provider_phase_changes = self.artifacts.preserve_ir_changes_to_tmp(
                             dirname, pid)
@@ -521,10 +521,10 @@ class Evaluation[S]:
                 already_preserved = record is not None
                 if record is not None:
                     published[pid] = record
-                if already_preserved and self.options.keep_everything:
+                if already_preserved and self.options.keep_successful:
                     with self._secondary_operation(pid, 'live_coverage'):
                         self.coverage.maybe_run_live_jacoco(pid, provider_phase_changes)
-            if (self.options.keep_everything and not already_preserved and
+            if (self.options.keep_successful and not already_preserved and
                     pid not in inconclusive):
                 self._warn_secondary_errors(
                     pid, self._preserve_case(dirname, pid))
