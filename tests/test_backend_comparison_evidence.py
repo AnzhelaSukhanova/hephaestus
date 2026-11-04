@@ -111,9 +111,8 @@ def test_fault_evidence_includes_all_attempts_even_without_metrics(
         assert (retained / 'variants' / backend / 'output.txt').exists()
         assert evidence['reproduce_argv'][1] == 'program.kt'
         assert not any(directory in arg for arg in evidence['reproduce_argv'])
-        if backend != 'js':
-            artifact = 'd1.jar' if backend == 'jvm' else 'd1.klib'
-            assert (retained / 'variants' / backend / artifact).exists()
+        assert sorted(path.name for path in (retained / 'variants' / backend).iterdir()) == [
+            'output.txt', 'result.json']
     assert json.loads((Path(app.options.test_directory) / 'faults.json').read_text())['1']['error']
     fault_dependencies = json.loads(
         (Path(app.options.test_directory) / 'faults.json').read_text()
@@ -125,6 +124,29 @@ def test_fault_evidence_includes_all_attempts_even_without_metrics(
     }
     assert app.reporting.stats['totals'] == {'passed': 0, 'failed': 1, 'inconclusive': 0}
     assert '## 1' in (Path(app.options.test_directory) / 'divergences.md').read_text()
+    for backend in app.compilation.settings_by_variant:
+        evidence = json.loads((retained / 'variants' / backend / 'result.json').read_text())
+        assert evidence['published_klib'] is None
+
+
+def test_kept_published_pass_references_klibs_instead_of_copying(tmp_path, monkeypatch):
+    app = configured_application(tmp_path, monkeypatch)
+    app.options.keep_successful = True
+    directory, program = case(app, tmp_path, 1)
+    result = app.evaluation.check_oracle(directory, {1: program})
+    assert not result.faults and not result.inconclusive and 1 in result.publications
+    retained = Path(app.options.test_directory) / '1'
+    assert (retained / 'comparison.json').exists()
+    for backend in app.compilation.settings_by_variant:
+        variant_directory = retained / 'variants' / backend
+        evidence = json.loads((variant_directory / 'result.json').read_text())
+        suffix = '.jar' if backend == 'jvm' else '.klib'
+        assert evidence['published_klib'] == os.path.join('..', 'klibs', f'd1-{backend}{suffix}')
+        assert ((retained / evidence['published_klib']).resolve()
+                == Path(app.manager.published_klib_path(1, backend)).resolve())
+        assert (retained / evidence['published_klib']).exists()
+        assert sorted(path.name for path in variant_directory.iterdir()) == [
+            'output.txt', 'result.json']
 
 
 def test_inconclusive_is_not_counted_as_pass_and_references_published_dependencies(
