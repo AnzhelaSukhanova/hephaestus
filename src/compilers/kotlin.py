@@ -228,7 +228,7 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
         if self.settings.backend == 'jvm':
             return '$HOME/kotlin/dist/kotlinc/lib/kotlin-stdlib.jar'
         is_wasm = self.settings.backend == 'wasm'
-        return f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.4.255-SNAPSHOT.klib'
+        return f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.5.255-SNAPSHOT.klib'
 
     def _libraries_value(self) -> str:
         libraries = [self.stdlib_path()] + self.dependency_klibs
