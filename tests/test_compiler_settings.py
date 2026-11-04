@@ -82,7 +82,7 @@ def test_explicit_kotlin_commands(backend, dump_ir, inlining_mode):
     else:
         stdlib = ('$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-' +
                   ('wasm-' if backend == 'wasm' else '') +
-                  'js-2.4.255-SNAPSHOT.klib')
+                  'js-2.5.255-SNAPSHOT.klib')
         command = ['/custom/kotlinc', 'src',
                    '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
                    '-Xir-produce-klib-file',
