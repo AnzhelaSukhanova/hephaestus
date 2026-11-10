@@ -11,20 +11,21 @@ authors = [
 ]
 description = "A framework for testing compilers' type checkers"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: GPL v3.0 License",
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
     "networkx",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "coverage>=7.10", "pyright>=1.1.400"]
 
 [tool.setuptools]
 packages = [
@@ -34,6 +35,9 @@ packages = [
   "src.generators",
   "src.ir",
   "src.modules",
+  "src.oracles",
+  "src.tools",
+  "src.tools.kotlin_compilers",
   "src.transformations",
   "src.translators",
 ]

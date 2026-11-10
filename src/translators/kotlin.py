@@ -1,9 +1,18 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Collection
+
 from src.ir import ast, kotlin_types as kt, types as tp, type_utils as tu
+from src.ir.context import Context
+from src.ir.node import Node
+from src import utils as ut
 from src.translators.base import BaseTranslator
 
 
-def append_to(visit):
-    def inner(self, node):
+def append_to[NodeType: Node](
+        visit: Callable[[KotlinTranslator, NodeType], None]
+) -> Callable[[KotlinTranslator, NodeType], None]:
+    def inner(self: KotlinTranslator, node: NodeType) -> None:
         self._nodes_stack.append(node)
         res = visit(self, node)
         self._nodes_stack.pop()
@@ -16,22 +25,23 @@ class KotlinTranslator(BaseTranslator):
     incorrect_filename = "incorrect.kt"
     executable = "program.jar"
 
-    def __init__(self, package=None, options={}):
+    def __init__(self, package: str | None = None,
+                 options: dict[str, str | bool] = {}) -> None:
         super().__init__(package, options)
-        self._children_res = []
-        self.ident = 0
-        self.is_unit = False
-        self.is_lambda = False
-        self._cast_integers = False
-        self.context = None
+        self._children_res: list[str] = []
+        self.ident: int = 0
+        self.is_unit: bool = False
+        self.is_lambda: bool = False
+        self._cast_integers: bool = False
+        self.context: Context | None = None
 
         # We need nodes_stack to assign lambdas to vars when needed.
         # Specifically, in visit_lambda we use `var y = ` as a prefix only if
         # parent node is a block and its parent is a function declaration that
         # return Unit.
-        self._nodes_stack = [None]
+        self._nodes_stack: list[Node | None] = [None]
 
-    def _reset_state(self):
+    def _reset_state(self) -> None:
         self._children_res = []
         self.ident = 0
         self.is_unit = False
@@ -40,15 +50,20 @@ class KotlinTranslator(BaseTranslator):
         self._nodes_stack = [None]
         self.context = None
 
+    def _strip_own_prefix(self, name: str) -> str:
+        if self.context.name_is_local(name):
+            _, name = ut.split_qualified_name(name)
+        return name
+
     @staticmethod
-    def get_filename():
+    def get_filename() -> str:
         return KotlinTranslator.filename
 
     @staticmethod
-    def get_incorrect_filename():
+    def get_incorrect_filename() -> str:
         return KotlinTranslator.incorrect_filename
 
-    def type_arg2str(self, t_arg):
+    def type_arg2str(self, t_arg: tp.Type) -> str:
         if not isinstance(t_arg, tp.WildCardType):
             return self.get_type_name(t_arg)
         if t_arg.is_invariant():
@@ -58,7 +73,7 @@ class KotlinTranslator(BaseTranslator):
         else:
             return "in " + self.get_type_name(t_arg.bound)
 
-    def get_type_name(self, t):
+    def get_type_name(self, t: tp.Type) -> str:
         if t.is_wildcard():
             t = t.get_bound_rec()
             return self.get_type_name(t)
@@ -71,7 +86,7 @@ class KotlinTranslator(BaseTranslator):
         return "{}<{}>".format(t.name, ", ".join([self.type_arg2str(ta)
                                                   for ta in t.type_args]))
 
-    def pop_children_res(self, children):
+    def pop_children_res(self, children: Collection[Node]) -> list[str]:
         len_c = len(children)
         if not len_c:
             return []
@@ -79,7 +94,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res = self._children_res[:-len_c]
         return res
 
-    def visit_program(self, node):
+    def visit_program(self, node: ast.Program) -> None:
         self.context = node.context
         children = node.children()
         for c in children:
@@ -92,7 +107,7 @@ class KotlinTranslator(BaseTranslator):
             self.pop_children_res(children))
 
     @append_to
-    def visit_block(self, node):
+    def visit_block(self, node: ast.Block) -> None:
         children = node.children()
         is_unit = self.is_unit
         is_lambda = self.is_lambda
@@ -119,7 +134,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_super_instantiation(self, node):
+    def visit_super_instantiation(self, node: ast.SuperClassInstantiation) -> None:
         self.ident = 0
         children = node.children()
         for c in children:
@@ -133,7 +148,7 @@ class KotlinTranslator(BaseTranslator):
                 children_res) + ")")
 
     @append_to
-    def visit_class_decl(self, node):
+    def visit_class_decl(self, node: ast.ClassDeclaration) -> None:
         old_ident = self.ident
         self.ident += 2
         children = node.children()
@@ -168,7 +183,7 @@ class KotlinTranslator(BaseTranslator):
                           node.class_type != ast.ClassDeclaration.INTERFACE and
                           not is_sam) else "",
             p=class_prefix,
-            n=node.name,
+            n=self._strip_own_prefix(node.name),
             tps="<" + type_parameters_res + ">" if type_parameters_res else "",
             fields="(" + ", ".join(field_res) + ")" if field_res else "",
             s=": " + ", ".join(superclasses_res) if superclasses_res else "",
@@ -189,7 +204,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_type_param(self, node):
+    def visit_type_param(self, node: tp.TypeParameter) -> None:
         self._children_res.append("{}{}{}{}{}".format(
             node.variance_to_string(),
             'reified ' if node.reified else '',
@@ -203,7 +218,7 @@ class KotlinTranslator(BaseTranslator):
         ))
 
     @append_to
-    def visit_var_decl(self, node):
+    def visit_var_decl(self, node: ast.VariableDeclaration) -> None:
         old_ident = self.ident
         prefix = " " * self.ident
         self.ident = 0
@@ -215,7 +230,7 @@ class KotlinTranslator(BaseTranslator):
             c.accept(self)
         children_res = self.pop_children_res(children)
         var_type = "val " if node.is_final else "var "
-        res = prefix + var_type + node.name
+        res = prefix + var_type + self._strip_own_prefix(node.name)
         if node.var_type is not None:
             res += ": " + self.get_type_name(node.var_type)
         res += " = " + children_res[0]
@@ -224,7 +239,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_call_argument(self, node):
+    def visit_call_argument(self, node: ast.CallArgument) -> None:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -238,21 +253,38 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_field_decl(self, node):
-        prefix = 'open ' if node.can_override else ''
+    def visit_field_decl(self, node: ast.FieldDeclaration) -> None:
+        prefix = ''
+        prefix += '' if node.visibility == ast.Visibilities.UNKNOWN else (
+            node.visibility.name + ' '
+        )
+        if node.override:
+            prefix += '' if node.can_override else 'final '
+        else:
+            prefix += 'open ' if node.can_override else ''
+
         prefix += '' if not node.override else 'override '
-        prefix += 'val ' if node.is_final else 'var '
+        prefix += 'val ' if node.is_immutable else 'var '
         res = prefix + node.name + ": " + self.get_type_name(node.field_type)
         self._children_res.append(res)
 
     @append_to
-    def visit_param_decl(self, node):
+    def visit_param_decl(self, node: ast.ParameterDeclaration) -> None:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
         for c in node.children():
             c.accept(self)
         self.ident = old_ident
+
+        INLINING_SCOPE_TO_KOTLIN = {
+            ast.InliningScope.DEFAULT: '',
+            ast.InliningScope.INLINE: '',
+            ast.InliningScope.NOINLINE: 'noinline ',
+            ast.InliningScope.CROSSINLINE: 'crossinline ',
+        }
+
+        inlining_scope_str = INLINING_SCOPE_TO_KOTLIN[node.inlining_scope]
         vararg_str = 'vararg ' if node.vararg else ''
         # Recall that varargs ara actually arrays in the signature of
         # the corresponding parameters.
@@ -261,14 +293,14 @@ class KotlinTranslator(BaseTranslator):
             if node.vararg and isinstance(node.param_type,
                                           tp.ParameterizedType)
             else node.param_type)
-        res = vararg_str + node.name + ": " + self.get_type_name(param_type)
+        res = inlining_scope_str + vararg_str + node.name + ": " + self.get_type_name(param_type)
         if len(children):
             children_res = self.pop_children_res(children)
             res += " = " + children_res[0]
         self._children_res.append(res)
 
     @append_to
-    def visit_func_decl(self, node):
+    def visit_func_decl(self, node: ast.FunctionDeclaration) -> None:
         old_ident = self.ident
         self.ident += 2
         children = node.children()
@@ -288,13 +320,20 @@ class KotlinTranslator(BaseTranslator):
             children_res[len_params:len_type_params + len_params])
         body_res = children_res[-1] if node.body else ''
         prefix = " " * old_ident
-        prefix += "" if node.is_final else "open "
+        prefix += '' if node.visibility == ast.Visibilities.UNKNOWN else (
+            node.visibility.name + ' '
+        )
+        if node.override:
+            prefix += "" if not node.is_final else "final "
+        else:
+            prefix += "" if node.is_final else "open "
         prefix += "" if not node.is_inline else "inline "
         prefix += "" if not node.override else "override "
         prefix += "" if node.body is not None else "abstract "
         type_params = (
             "<" + type_parameters_res + ">" if type_parameters_res else "")
-        res = prefix + "fun " + type_params + node.name + "(" + ", ".join(
+        res = prefix + "fun " + type_params + self._strip_own_prefix(
+            node.name) + "(" + ", ".join(
             param_res) + ")"
         if node.ret_type:
             res += ": " + self.get_type_name(node.ret_type)
@@ -307,7 +346,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_lambda(self, node):
+    def visit_lambda(self, node: ast.Lambda) -> None:
         def inside_block_unit_function():
             if (isinstance(self._nodes_stack[-2], ast.Block) and
                     isinstance(self._nodes_stack[-3], (ast.Lambda,
@@ -369,7 +408,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_bottom_constant(self, node):
+    def visit_bottom_constant(self, node: ast.BottomConstant) -> None:
         bottom = "{}TODO(){}".format(
             "(" if node.t else "",
             " as " + self.get_type_name(node.t) + ")" if node.t else ""
@@ -377,7 +416,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append((self.ident * " ") + bottom)
 
     @append_to
-    def visit_integer_constant(self, node):
+    def visit_integer_constant(self, node: ast.IntegerConstant) -> None:
         if not self._cast_integers:
             self._children_res.append(" " * self.ident + str(node.literal))
             return
@@ -397,7 +436,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(" " * self.ident + literal + suffix)
 
     @append_to
-    def visit_real_constant(self, node):
+    def visit_real_constant(self, node: ast.RealConstant) -> None:
         real_types = {
             kt.Float: "f"
         }
@@ -406,21 +445,21 @@ class KotlinTranslator(BaseTranslator):
             " " * self.ident + str(node.literal) + suffix)
 
     @append_to
-    def visit_char_constant(self, node):
+    def visit_char_constant(self, node: ast.CharConstant) -> None:
         self._children_res.append("{}'{}'".format(
             " " * self.ident, node.literal))
 
     @append_to
-    def visit_string_constant(self, node):
+    def visit_string_constant(self, node: ast.StringConstant) -> None:
         self._children_res.append('{}"{}"'.format(
             " " * self.ident, node.literal))
 
     @append_to
-    def visit_boolean_constant(self, node):
+    def visit_boolean_constant(self, node: ast.BooleanConstant) -> None:
         self._children_res.append(" " * self.ident + str(node.literal))
 
     @append_to
-    def visit_array_expr(self, node):
+    def visit_array_expr(self, node: ast.ArrayExpr) -> None:
         is_specialized = isinstance(
             node.array_type.t_constructor, kt.SpecializedArrayType)
         if not node.length:
@@ -456,11 +495,11 @@ class KotlinTranslator(BaseTranslator):
             ", ".join(children_res)))
 
     @append_to
-    def visit_variable(self, node):
+    def visit_variable(self, node: ast.Variable) -> None:
         self._children_res.append(" " * self.ident + node.name)
 
     @append_to
-    def visit_binary_op(self, node):
+    def visit_binary_op(self, node: ast.BinaryOp) -> None:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -473,10 +512,10 @@ class KotlinTranslator(BaseTranslator):
         self.ident = old_ident
         self._children_res.append(res)
 
-    def visit_logical_expr(self, node):
+    def visit_logical_expr(self, node: ast.LogicalExpr) -> None:
         self.visit_binary_op(node)
 
-    def visit_equality_expr(self, node):
+    def visit_equality_expr(self, node: ast.EqualityExpr) -> None:
         prev = self._cast_integers
         # When we encounter equality expressions,
         # we need to explicitly cast integer literals.
@@ -490,14 +529,14 @@ class KotlinTranslator(BaseTranslator):
         self.visit_binary_op(node)
         self._cast_integers = prev
 
-    def visit_comparison_expr(self, node):
+    def visit_comparison_expr(self, node: ast.ComparisonExpr) -> None:
         self.visit_binary_op(node)
 
-    def visit_arith_expr(self, node):
+    def visit_arith_expr(self, node: ast.ArithExpr) -> None:
         self.visit_binary_op(node)
 
     @append_to
-    def visit_conditional(self, node):
+    def visit_conditional(self, node: ast.Conditional) -> None:
         old_ident = self.ident
         self.ident += 2
         children = node.children()
@@ -511,7 +550,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_is(self, node):
+    def visit_is(self, node: ast.Is) -> None:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -525,7 +564,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_new(self, node):
+    def visit_new(self, node: ast.New) -> None:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -544,7 +583,20 @@ class KotlinTranslator(BaseTranslator):
                 ", ".join(children_res)))
 
     @append_to
-    def visit_field_access(self, node):
+    def visit_enforce_type_via_cast(self, node: ast.EnforceTypeViaCast) -> None:
+        old_ident = self.ident
+        self.ident = 0
+        node.expr.accept(self)
+        child_res = self.pop_children_res(node.children())
+        self.ident = old_ident
+        self._children_res.append(
+            "{}({} as {})".format(
+                " " * self.ident,
+                child_res[0],
+                self.get_type_name(node.target_type)))
+
+    @append_to
+    def visit_field_access(self, node: ast.FieldAccess) -> None:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -561,7 +613,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_func_ref(self, node):
+    def visit_func_ref(self, node: ast.FunctionReference) -> None:
         old_ident = self.ident
 
         self.ident = 0
@@ -575,15 +627,19 @@ class KotlinTranslator(BaseTranslator):
         # TODO handle lambdas
         receiver = children_res[0] if children_res else ""
         receiver += "::"
+        # It might be counterintuitive why we do checks both during
+        # AST generation (Generator._gen_func_ref()) and here
+        # but we simply strip ::src.<local_module>func to ::func
+        # As that's the alternative way to call it
         res = "{ident}{receiver}{name}".format(
             ident=" " * self.ident,
             receiver=receiver,
-            name=node.func
+            name=self._strip_own_prefix(node.func)
         )
         self._children_res.append(res)
 
     @append_to
-    def visit_func_call(self, node):
+    def visit_func_call(self, node: ast.FunctionCall) -> None:
         old_ident = self.ident
         self.ident = 0
         children = node.children()
@@ -614,7 +670,7 @@ class KotlinTranslator(BaseTranslator):
         self._children_res.append(res)
 
     @append_to
-    def visit_assign(self, node):
+    def visit_assign(self, node: ast.Assignment) -> None:
         old_ident = self.ident
         prev = self._cast_integers
         self._cast_integers = True

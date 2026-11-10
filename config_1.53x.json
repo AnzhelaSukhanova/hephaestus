@@ -1,0 +1,53 @@
+{
+  "limits": {
+    "max_type_params": 2
+  },
+  "prob": {
+    "bounded_type_parameters": 0.2,
+    "class_declaration_modality": {
+      "declaration_final": 0.65,
+      "override_final": 0.5
+    },
+    "class_field_is_immutable": 0.65,
+    "class_fields_modality": {
+      "declaration_final": 0.6,
+      "override_final": 0.35
+    },
+    "class_methods_modality": {
+      "declaration_final": 0.6,
+      "override_final": 0.3
+    },
+    "class_type": {
+      "abstract": 0.2,
+      "interface": 0.15,
+      "regular": 0.65
+    },
+    "func_ref": 0.6,
+    "func_ref_call": 1.0,
+    "function_expr": 0.85,
+    "function_visibility": {
+      "not_specified": 0.35,
+      "private": 0.35,
+      "public": 0.3
+    },
+    "helper_functions": {
+      "is_global_function": 0.2,
+      "is_global_method": 0.65,
+      "is_local_function": 0.15
+    },
+    "override_also_adding_setter": 0.35,
+    "parameterized_functions": 0.2,
+    "property_visibility": {
+      "not_specified": 0.35,
+      "private": 0.45,
+      "public": 0.2
+    },
+    "reified_type_parameters": 0.0,
+    "sam_coercion": 1.0,
+    "top_level_declarations": {
+      "class_declaration": 0.45,
+      "function_declaration": 0.4,
+      "variable_declaration": 0.15
+    }
+  }
+}

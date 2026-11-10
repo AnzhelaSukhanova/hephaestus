@@ -1,44 +1,55 @@
 # pylint: disable=inherit-non-class,pointless-statement,expression-not-assigned
-from typing import Tuple, NamedTuple
+from typing import (DefaultDict, List, Mapping, NamedTuple, Optional, Set,
+                    Tuple, TypeAlias)
 from collections import defaultdict
 
 import src.utils as ut
 from src.ir import ast
 from src.ir import types as tp
+from src.ir.context import Context, NamespacePath
 from src.ir.visitors import DefaultVisitor
 from src.transformations.base import change_namespace
-from src.analysis.use_analysis import UseAnalysis, GNode, get_decl
+from src.analysis.use_analysis import GNode, UseAnalysis, UseGraph, get_decl
 
 
 class CNode(NamedTuple):
-    namespace: Tuple[str, ...]
+    namespace: NamespacePath
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "/".join(self.namespace)
 
-    def is_none(self):
-        return self.namespace is None
+    def is_none(self) -> bool:
+        return not self.namespace
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
 
-def get_gnode_type(gnode, namespace, context):
+CallGraph: TypeAlias = Mapping[CNode, Set[CNode]]
+CallSites: TypeAlias = Mapping[CNode, Set[ast.FunctionCall]]
+MutableCallGraph: TypeAlias = DefaultDict[CNode, Set[CNode]]
+MutableCallSites: TypeAlias = DefaultDict[CNode, Set[ast.FunctionCall]]
+
+
+def get_gnode_type(gnode: GNode, namespace: NamespacePath,
+                   context: Context) -> Optional[tp.Type]:
     # TODO Do we need to add limit?
+    assert gnode.name is not None
     decl = get_decl(context, namespace, gnode.name)
     if decl:
         return decl[1].get_type()
     return None
 
 
-def find_gnode_type(gnode, namespace, context, use_graph):
+def find_gnode_type(gnode: GNode, namespace: NamespacePath,
+                    context: Context, use_graph: UseGraph) -> Optional[tp.Type]:
     """Find the type of a gnode
 
     If gnode is a declaration return its type, otherwise return the type
     of an adjacent node.
     """
     def get_adj(gnode):
-        return [v for v, e in use_graph.items if gnode in e]
+        return [v for v, e in use_graph.items() if gnode in e]
 
     gnode_type = get_gnode_type(gnode, namespace, context)
     if gnode_type:
@@ -59,7 +70,8 @@ def find_gnode_type(gnode, namespace, context, use_graph):
     return None
 
 
-def namespaces_reduction(namespace, all_namespaces):
+def namespaces_reduction(namespace: NamespacePath,
+                         all_namespaces: List[NamespacePath]) -> List[NamespacePath]:
     """Try to find filter out namespaces that cannot be called.
     """
     declared_inside_namespace = [ns for ns in all_namespaces
@@ -82,7 +94,7 @@ def namespaces_reduction(namespace, all_namespaces):
     return all_namespaces
 
 
-class CallAnalysis(DefaultVisitor):
+class CallAnalysis(DefaultVisitor[None, tuple[CallGraph, CallSites]]):
     """Get the call graph of a program.
 
     Currently we only handle simple function calls.
@@ -99,22 +111,27 @@ class CallAnalysis(DefaultVisitor):
     analysis = CallAnalysis(self.program)
     call_graph, calls = analysis.result()
     """
-    def __init__(self, program):
+    def __init__(self, program: ast.Program):
         # The type of each node is: CNode
-        self._call_graph = defaultdict(set)  # namespace => [CNode]
+        self._call_graph: MutableCallGraph = defaultdict(set)  # namespace => [CNode]
         # All call sites of a function
-        self._calls = defaultdict(set)  # namespace => [FunctionCall]
-        self._namespace = ast.GLOBAL_NAMESPACE
+        self._calls: MutableCallSites = defaultdict(set)  # namespace => [FunctionCall]
+        self._namespace: NamespacePath = ast.GLOBAL_NAMESPACE
         # We compute the use_graph for each top level declaration.
-        self._use_graph = None
+        self._use_graph: Optional[UseGraph] = None
         self.program = program
         self.visit(self.program)
 
-    def result(self):
+    def result(self) -> Tuple[CallGraph, CallSites]:
         return self._call_graph, self._calls
 
-    def _get_func_namespace(self, func: str, receiver: ast.Expr = None):
-        def get_filtered_or_all(namespace, namespaces):
+    def _get_func_namespace(
+            self, func: str, receiver: Optional[ast.Expr] = None
+    ) -> Optional[List[NamespacePath]]:
+        def get_filtered_or_all(
+                namespace: NamespacePath,
+                namespaces: List[NamespacePath]
+        ) -> List[NamespacePath]:
             res = []
             for ns in namespaces:
                 if ut.prefix_lst(namespace, ns):
@@ -144,6 +161,7 @@ class CallAnalysis(DefaultVisitor):
         # Handle receiver
         if isinstance(receiver, ast.Variable):
             gnode = GNode(self._namespace, receiver.name)
+            assert self._use_graph is not None
             gnode_type = find_gnode_type(
                 gnode, self._namespace, self.program.context, self._use_graph)
             if isinstance(gnode_type, tp.Builtin) or gnode_type is None:

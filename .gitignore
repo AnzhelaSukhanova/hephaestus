@@ -48,6 +48,8 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+!/pyrightconfig.json
+.driver-coverage/
 htmlcov/
 .tox/
 .nox/
@@ -146,3 +148,4 @@ dmypy.json
 .DS_Store
 src/.DS_Store
 script.sh
+/coverage/

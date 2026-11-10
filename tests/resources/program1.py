@@ -29,7 +29,7 @@ bam_cls = ClassDeclaration("Bam", [])
 xA_field = FieldDeclaration(
     "x",
     StringType(),
-    is_final=True,
+    is_immutable=True,
     override=False
 )
 

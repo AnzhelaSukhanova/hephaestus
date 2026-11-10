@@ -1,12 +1,13 @@
 # pylint: disable=abstract-method
 from abc import ABC, abstractmethod
+from typing import List
 
-from src.ir.types import Builtin, TypeConstructor, TypeParameter
+from src.ir.types import Builtin, Type, TypeConstructor, TypeParameter
 
 
 class BuiltinFactory(ABC):
     @abstractmethod
-    def get_language(self):
+    def get_language(self) -> str:
         pass
 
     @abstractmethod
@@ -14,70 +15,70 @@ class BuiltinFactory(ABC):
         pass
 
     @abstractmethod
-    def get_void_type(self):
+    def get_void_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_any_type(self):
+    def get_any_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_number_type(self):
+    def get_number_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_integer_type(self):
+    def get_integer_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_byte_type(self):
+    def get_byte_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_short_type(self):
+    def get_short_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_long_type(self):
+    def get_long_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_float_type(self):
+    def get_float_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_double_type(self):
+    def get_double_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_big_decimal_type(self):
+    def get_big_decimal_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_big_integer_type(self):
+    def get_big_integer_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_boolean_type(self):
+    def get_boolean_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_char_type(self):
+    def get_char_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_string_type(self):
+    def get_string_type(self) -> Type:
         pass
 
     @abstractmethod
-    def get_array_type(self):
+    def get_array_type(self) -> TypeConstructor:
         pass
 
     @abstractmethod
-    def get_function_type(self, nr_parameters=0):
+    def get_function_type(self, nr_parameters: int = 0) -> TypeConstructor:
         pass
 
-    def get_non_nothing_types(self):
+    def get_non_nothing_types(self) -> List[Type]:
         return [
             self.get_any_type(),
             self.get_number_type(),
@@ -95,7 +96,7 @@ class BuiltinFactory(ABC):
             self.get_array_type()
         ]
 
-    def get_number_types(self):
+    def get_number_types(self) -> List[Type]:
         return [
             self.get_byte_type(),
             self.get_short_type(),
@@ -107,10 +108,10 @@ class BuiltinFactory(ABC):
             self.get_big_integer_type(),
         ]
 
-    def get_function_types(self, max_parameters):
+    def get_function_types(self, max_parameters: int) -> List[TypeConstructor]:
         return [self.get_function_type(i) for i in range(0, max_parameters+1)]
 
-    def get_nothing(self):
+    def get_nothing(self) -> Type:
         raise NotImplementedError
 
 

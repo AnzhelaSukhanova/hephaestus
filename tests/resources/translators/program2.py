@@ -3,7 +3,7 @@ from src.ir.context import *
 
 
 def produce_program(lang, types):
-    a_a_field = FieldDeclaration("a", types.StringType(), is_final=True)
+    a_a_field = FieldDeclaration("a", types.StringType(), is_immutable=True)
     a_foo = FunctionDeclaration(
         "foo",
         [],
