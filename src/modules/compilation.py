@@ -95,7 +95,7 @@ class Compilation[S]:
         try:
             is_windows = os.name == 'nt'
             sys_env = os.environ.copy()
-            sys_env['JAVA_OPTS'] = "-Xmx8g"
+            sys_env['JAVA_OPTS'] = os.environ.get('HEPHAESTUS_JAVA_OPTS', "-Xmx8g")
             if not is_windows:
                 # FIXME the wildcard * maybe won't work in Windows
                 command: str | list[str] = ' '.join(arguments)
