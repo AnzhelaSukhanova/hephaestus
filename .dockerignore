@@ -1,0 +1,30 @@
+.git
+.venv
+venv/
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.coverage*
+htmlcov/
+bugs/
+coverage/
+deployment/
+.idea/
+.vscode/
+*.log
+# Local presets: CI starts `python -m ci.fuzz`, never these scripts.
+run-*.sh
+# Local-only output and tool state.
+out/
+logs
+temp/
+dir/
+performance/
+verify_lab/
+build/
+*.egg-info/
+.claude/
+.junie/
+.driver-coverage/
+.module-relocation-validation/
+**/.DS_Store
