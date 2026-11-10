@@ -16,6 +16,7 @@ from src.generators.config import cfg
 from src.modules.artifacts import Artifacts
 from src.modules.compilation import ORDINARY_VARIANT, Compilation
 from src.modules.worker import RunOptions
+from tests.real_kotlin import skip_without_master
 from tests.test_crossmodule_backend_comparison import case
 
 
@@ -156,9 +157,7 @@ def real_jvm_settings():
     if os.environ.get('HEPHAESTUS_TEST_REAL_KOTLIN') != '1':
         pytest.skip('set HEPHAESTUS_TEST_REAL_KOTLIN=1 to run real kotlinc-jvm tests')
     settings = KotlinSettings('jvm')
-    problem = KotlinCompiler('source', settings=settings).installation_problem()
-    if problem is not None:
-        pytest.skip(problem)
+    skip_without_master([settings])
     return settings
 
 
@@ -169,6 +168,7 @@ def real_compilation(directory):
                        settings=real_jvm_settings())
 
 
+@pytest.mark.real_kotlin
 @pytest.mark.parametrize('text,phase', [
     (None, None),
     ('fun first(): Int = "wrong type"\n', 'frontend'),
@@ -198,6 +198,7 @@ def test_real_jvm_single_module(text, phase):
             assert 'platform declaration clash' in observation.output
 
 
+@pytest.mark.real_kotlin
 def test_real_jvm_friend_path_grants_internal_access():
     with TemporaryDirectory() as name:
         directory = Path(name).resolve()

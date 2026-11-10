@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.real_kotlin import skip_without_master
+
+
+pytestmark = pytest.mark.real_kotlin
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LANGUAGE_FLAG = "-XXLanguage:-ForbidOverriddenDefaultParametersInInline"
@@ -153,34 +158,14 @@ print(json.dumps({"executed": executed, "expected": expected}))
 """
 
 
-def requirements(oracle, backend):
-    from src.compilers.kotlin import (
-        KotlinCompiler, KotlinSettings, _compiler_executable,
-    )
+def skip_if_backend_unavailable(oracle, backend):
+    from src.compilers.kotlin import KotlinSettings
     from src.modules.oracle_modes import BackendComparisonMode
 
     if oracle == "compilation":
-        settings = [KotlinSettings(backend=backend)]
+        skip_without_master([KotlinSettings(backend=backend)])
     else:
-        settings = list(BackendComparisonMode().variant_settings().values())
-    paths = []
-    for item in settings:
-        paths.append(_compiler_executable(item))
-        # Native commands do not name the standard library explicitly.
-        if oracle != "compilation" or item.backend != "native":
-            paths.append(KotlinCompiler("", settings=item).stdlib_path())
-    return [Path(os.path.expandvars(path)) for path in paths]
-
-
-def skip_if_backend_unavailable(oracle, backend):
-    missing = [path for path in requirements(oracle, backend) if not path.exists()]
-    if missing:
-        pytest.skip(
-            "{} {} test needs missing file(s): {}".format(
-                oracle, backend,
-                ", ".join(str(path) for path in missing),
-            )
-        )
+        skip_without_master(BackendComparisonMode().variant_settings().values())
 
 
 def run_hephaestus_fault_capture(tmp_path, oracle, backend, fixture_name, source):

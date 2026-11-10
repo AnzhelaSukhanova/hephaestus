@@ -10,6 +10,7 @@ from src.compilers.results import ProcessResult
 from src.ir import ast
 from src.ir.context import Context
 from src.modules.processor import ProgramProcessor
+from src.tools.kotlin_compilers.layout import Layout
 from tests.driver.support import assert_arguments
 
 
@@ -54,9 +55,8 @@ def assert_command(arguments: list[str], backend: str, source: Path,
         if dependencies:
             expected += ['-friend-modules', dependencies[0]]
     else:
-        stdlib = ('$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-' +
-                  ('wasm-' if backend == 'wasm' else '') +
-                  'js-2.5.255-SNAPSHOT.klib')
+        stdlib = str(Layout().compiler_dir('master').resolve() / 'stdlib' /
+                     f'kotlin-stdlib-{"wasm-" if backend == "wasm" else ""}js.klib')
         expected += ['-Xir-produce-klib-file', '-ir-output-dir', '.',
                      '-ir-output-name', module,
                      '-libraries', os.pathsep.join([stdlib, *dependencies]),

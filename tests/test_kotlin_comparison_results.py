@@ -6,11 +6,10 @@ import zipfile
 import pytest
 
 from src.compilers.base import BaseCompiler
-from src.compilers.kotlin import (
-    KotlinCompiler, KotlinSettings, _compiler_executable,
-)
+from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.compilers.results import CompilationRequest, Diagnostic
 from src.modules.oracle_modes import BackendComparisonMode
+from tests.kotlin_compilers_fakes import fake_master
 from tests.test_compilation_variants import components
 
 
@@ -50,7 +49,7 @@ def test_isolated_klib_commands(tmp_path, backend):
         assert command[command.index('-ir-output-dir') + 1] == str(destination)
         assert '-Xwasm' not in command
         libraries = command[command.index('-libraries') + 1]
-        assert ('kotlin-stdlib-wasm-js-' in libraries) == (backend == 'wasm')
+        assert ('kotlin-stdlib-wasm-js.klib' in libraries) == (backend == 'wasm')
     assert compiler.get_dependency_artifact_filename() == artifact
 
 
@@ -90,15 +89,15 @@ def test_version_probe_preparation(tmp_path, backend):
         assert command[command.index('-ir-output-dir') + 1] == str(tmp_path)
 
 
-def test_comparison_preset_is_plain_immutable_settings():
+def test_comparison_preset_is_plain_immutable_settings(master):
     assert tuple(BACKEND_COMPARISON_VARIANTS) == ('js', 'native', 'wasm', 'jvm')
     assert all(settings.backend == variant_id
                for variant_id, settings in BACKEND_COMPARISON_VARIANTS.items())
     wasm = KotlinSettings('wasm')
     assert BACKEND_COMPARISON_VARIANTS['wasm'] == wasm
-    assert _compiler_executable(wasm).endswith('/kotlinc-wasm')
+    assert KotlinCompiler('source', settings=wasm).get_compiler_cmd()[0] == str(
+        master / 'kotlinc/bin/kotlinc-wasm')
     override = KotlinSettings('wasm', executable='/custom/kotlinc')
-    assert _compiler_executable(override) == '/custom/kotlinc'
     assert KotlinCompiler('source', settings=override).get_compiler_cmd()[0] == '/custom/kotlinc'
     with pytest.raises(TypeError):
         BACKEND_COMPARISON_VARIANTS['jvm'] = KotlinSettings()
@@ -167,9 +166,29 @@ def test_shell_return_codes_and_missing_executable(tmp_path):
     assert 'missing' in missing.output.lower()
 
 
-def test_shell_runner_expands_kotlin_home_executable(tmp_path, monkeypatch):
+def test_default_compiler_is_master_under_home(tmp_path, monkeypatch):
     home = tmp_path / 'home'
-    executable = home / 'kotlin/kotlin-native/dist/bin/kotlinc-native'
+    build = fake_master(home / 'kotlin-compilers', monkeypatch, launcher_script=(
+        '#!' + sys.executable + '\nprint("HOME_MASTER_RAN")\n'))
+    monkeypatch.delenv('KOTLIN_COMPILERS_HOME')
+    monkeypatch.setenv('HOME', str(home))
+    source = tmp_path / 'source.kt'
+    source.write_text('val value = 1')
+    _, _, compilation = components(tmp_path)
+    compiler = KotlinCompiler(str(source), settings=KotlinSettings('native'))
+
+    command = compiler.get_compiler_cmd()
+    result = compilation.run_process(command)
+
+    assert command[0] == str(build / 'native/bin/kotlinc-native')
+    assert compiler.installation_problem() is None
+    assert result.status
+    assert 'HOME_MASTER_RAN' in result.output
+
+
+def test_shell_runner_expands_explicit_home_executable(tmp_path, monkeypatch):
+    home = tmp_path / 'home'
+    executable = home / 'bin/kotlinc-native'
     executable.parent.mkdir(parents=True)
     executable.write_text(
         '#!' + sys.executable + '\nprint("HOME_EXECUTABLE_RAN")\n')
@@ -178,10 +197,12 @@ def test_shell_runner_expands_kotlin_home_executable(tmp_path, monkeypatch):
     source = tmp_path / 'source.kt'
     source.write_text('val value = 1')
     _, _, compilation = components(tmp_path)
-    compiler = KotlinCompiler(str(source), settings=KotlinSettings('native'))
+    compiler = KotlinCompiler(str(source), settings=KotlinSettings(
+        'native', executable='$HOME/bin/kotlinc-native'))
 
     result = compilation.run_process(compiler.get_compiler_cmd())
 
+    assert compiler.installation_problem() is None
     assert result.status
     assert 'HOME_EXECUTABLE_RAN' in result.output
 

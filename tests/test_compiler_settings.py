@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
@@ -21,9 +22,16 @@ from src.modules.artifacts import Artifacts
 from src.modules.compilation import ORDINARY_VARIANT, Compilation
 from src.modules.models import ProgramRes
 from src.modules.worker import RunOptions
+from src.tools.kotlin_compilers import layout as store_layout
+from tests.kotlin_compilers_fakes import fake_build, fake_master
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _klib_stdlib(master: Path, backend: str) -> str:
+    return str(master / 'stdlib' / ('kotlin-stdlib-wasm-js.klib' if backend == 'wasm'
+                                    else 'kotlin-stdlib-js.klib'))
 
 
 @pytest.mark.parametrize('compiler_cls, command, version', [
@@ -44,10 +52,10 @@ def test_unconfigured_adapter_defaults(compiler_cls, command, version):
     assert default.crash_msg is explicit.crash_msg is None
 
 
-def test_kotlin_default_settings():
+def test_kotlin_default_settings(master):
     default = KotlinCompiler('src')
     explicit = KotlinCompiler('src', settings=KotlinSettings())
-    command = ['$HOME/kotlin/kotlin-native/dist/bin/kotlinc-native', 'src',
+    command = [str(master / 'native/bin/kotlinc-native'), 'src',
                '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
                '-produce', 'library', '-o', 'src', '-nowarn',
                '-Xklib-ir-inliner=full']
@@ -56,13 +64,88 @@ def test_kotlin_default_settings():
     assert KotlinCompiler.get_compiler_version(KotlinSettings()) == [
         command[0], '-version']
     assert default.settings == KotlinSettings()
+    assert default.stdlib_path() == str(master / 'native/klib/common/stdlib')
+    assert default.installation_problem() is None
     assert KotlinSettings('wasm', True, '/custom/kotlinc').inlining_mode == 'full'
+
+
+@pytest.mark.parametrize('backend, launcher, stdlib', [
+    ('js', 'kotlinc/bin/kotlinc-js', 'stdlib/kotlin-stdlib-js.klib'),
+    ('wasm', 'kotlinc/bin/kotlinc-wasm', 'stdlib/kotlin-stdlib-wasm-js.klib'),
+    ('jvm', 'kotlinc/bin/kotlinc-jvm', 'kotlinc/lib/kotlin-stdlib.jar'),
+])
+def test_kotlin_defaults_come_from_master(master, backend, launcher, stdlib):
+    compiler = KotlinCompiler('src', settings=KotlinSettings(backend))
+    command = compiler.get_compiler_cmd()
+    assert command[0] == str(master / launcher)
+    assert compiler.stdlib_path() == str(master / stdlib)
+    assert compiler.installation_problem() is None
+    if backend != 'jvm':
+        libraries = command[command.index('-libraries') + 1]
+        assert libraries.split(os.pathsep)[0] == str(master / stdlib)
+
+
+def test_descriptor_launcher_args_follow_the_launcher(tmp_path, monkeypatch):
+    master = fake_master(tmp_path / 'other', monkeypatch, wasm_launcher=False)
+    launch = [str(master / 'kotlinc/bin/kotlinc-js'), '-Xwasm', '-Xwasm-target=wasm-js']
+    compiler = KotlinCompiler('src', module_name='module', settings=KotlinSettings('wasm'))
+    command = compiler.get_compiler_cmd()
+    assert command[:4] == [*launch, 'src']
+    assert KotlinCompiler.get_compiler_version(KotlinSettings('wasm'), 'scratch') == [
+        *launch, '-version', '-ir-output-name', 'probe', '-ir-output-dir', 'scratch']
+    enrichment = compiler.get_error_enrichment_cmds('file.kt')['xprofile-phases']
+    assert enrichment == [*launch, 'file.kt', *command[4:], '-Xprofile-phases']
+
+
+def test_explicit_executable_replaces_only_the_launcher(tmp_path, monkeypatch):
+    master = fake_master(tmp_path / 'other', monkeypatch, wasm_launcher=False)
+    compiler = KotlinCompiler('src', settings=KotlinSettings('wasm', executable='/custom/kotlinc'))
+    command = compiler.get_compiler_cmd()
+    assert command[:2] == ['/custom/kotlinc', 'src'] and '-Xwasm' not in command
+    assert compiler.stdlib_path() == str(master / 'stdlib/kotlin-stdlib-wasm-js.klib')
+    assert KotlinCompiler.get_compiler_version(compiler.settings) == ['/custom/kotlinc', '-version']
+
+
+def test_default_commands_name_the_build_resolved_first(master):
+    compiler = KotlinCompiler('src', settings=KotlinSettings('js'))
+    first = compiler.get_compiler_cmd()
+    # A sync re-points master mid-run; this process keeps the build it resolved.
+    store = store_layout.Layout()
+    fake_build(store, '2.5.20-dev-2')
+    store.set_symlink('master', '2.5.20-dev-2')
+    assert compiler.get_compiler_cmd() == first
+    assert compiler.stdlib_path() == _klib_stdlib(master, 'js')
+    native = KotlinCompiler('src').get_compiler_cmd()[0]
+    assert native == str(master / 'native/bin/kotlinc-native')
+
+
+def test_construction_and_diagnostics_do_not_touch_the_store(tmp_path, monkeypatch):
+    monkeypatch.setenv('KOTLIN_COMPILERS_HOME', str(tmp_path / 'absent'))
+    store_layout._resolved_install.cache_clear()
+    compiler = KotlinCompiler('src', settings=KotlinSettings('js'))
+    parsed = compiler.collect_diagnostics('src/a.kt:1:2: error: boom\n')
+    assert [(error.line, error.column, error.message) for error in parsed.errors] == [(1, 2, 'boom')]
+    assert not (tmp_path / 'absent').exists()
+    # Sync is assumed to have installed master; without it the first lookup fails.
+    with pytest.raises(TypeError):
+        compiler.get_compiler_cmd()
+
+
+def _spawned_default_command() -> list[str]:
+    return KotlinCompiler('src').get_compiler_cmd()
+
+
+def test_spawned_worker_resolves_master_from_the_inherited_store(master):
+    with multiprocessing.get_context('spawn').Pool(1) as pool:
+        command = pool.apply(_spawned_default_command)
+    assert command == KotlinCompiler('src').get_compiler_cmd()
+    assert command[0] == str(master / 'native/bin/kotlinc-native')
 
 
 @pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 @pytest.mark.parametrize('dump_ir', [False, True])
 @pytest.mark.parametrize('inlining_mode', INLINING_MODES)
-def test_explicit_kotlin_commands(backend, dump_ir, inlining_mode):
+def test_explicit_kotlin_commands(master, backend, dump_ir, inlining_mode):
     settings = KotlinSettings(backend, dump_ir, '/custom/kotlinc', inlining_mode)
     compiler = KotlinCompiler('src', ['filter'], ['direct.klib', 'indirect.klib'],
                               ['direct.klib'], 'module', settings=settings)
@@ -80,9 +163,7 @@ def test_explicit_kotlin_commands(backend, dump_ir, inlining_mode):
                    '-classpath', os.pathsep.join(['direct.klib', 'indirect.klib']),
                    '-Xfriend-paths=direct.klib']
     else:
-        stdlib = ('$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-' +
-                  ('wasm-' if backend == 'wasm' else '') +
-                  'js-2.5.255-SNAPSHOT.klib')
+        stdlib = _klib_stdlib(master, backend)
         command = ['/custom/kotlinc', 'src',
                    '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath',
                    '-Xir-produce-klib-file',

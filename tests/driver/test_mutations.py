@@ -57,6 +57,8 @@ def test_mutation_sensitivity(mutation: Mutation, tmp_path: Path,
     shutil.copytree(original / 'src', copied / 'src', ignore=shutil.ignore_patterns('__pycache__'))
     (copied / 'tests').mkdir()
     shutil.copy2(original / 'tests/__init__.py', copied / 'tests/__init__.py')
+    shutil.copy2(original / 'tests/kotlin_compilers_fakes.py',
+                 copied / 'tests/kotlin_compilers_fakes.py')
     shutil.copytree(original / 'tests/driver', copied / 'tests/driver',
                     ignore=shutil.ignore_patterns('__pycache__'))
     target = copied / mutation.path

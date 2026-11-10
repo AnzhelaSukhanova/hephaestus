@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
+from pathlib import Path
 import tarfile
 import urllib.error
 import zipfile
 
-from src.tools.kotlin_compilers import download, releases
+from src.tools.kotlin_compilers import download, layout as store_layout, releases
+from src.tools.kotlin_compilers.descriptor import build_descriptor, write_descriptor
 from src.tools.kotlin_compilers.dev import DEV_REPO
+from src.tools.kotlin_compilers.layout import HOME_ENV, Layout
 from src.tools.kotlin_compilers.releases import (
     GITHUB, MAVEN_CENTRAL, artifact_url, compiler_zip_name, github_asset_url, maven_url,
     native_asset_name,
@@ -254,6 +258,56 @@ def publish_dev(web: FakeWeb, version: str, host: str = 'macos-aarch64', *,
         web.add(maven_url(dev, artifact, version, 'klib'), make_klib(abi), 'sha1')
     web.add(maven_url(dev, 'kotlin-native-prebuilt', version, 'tar.gz', host),
             make_native_tar(version, host, abi), 'sha1')
+
+
+FAKE_MASTER_VERSION = '2.5.20-dev-1'
+
+
+def fake_build(layout: Layout, version: str = FAKE_MASTER_VERSION, *,
+               launcher_script: str = '#!/bin/sh\n', wasm_launcher: bool = True,
+               abi: str = '2.5.0') -> Path:
+    """An installed dev build with every backend; without ``wasm_launcher`` the
+    descriptor drives wasm through ``kotlinc-js`` and its ``-Xwasm`` arguments."""
+    directory = layout.compiler_dir(version)
+    launchers = ['kotlinc/bin/kotlinc-jvm', 'kotlinc/bin/kotlinc-js', 'native/bin/kotlinc-native']
+    if wasm_launcher:
+        launchers.append('kotlinc/bin/kotlinc-wasm')
+    for launcher in launchers:
+        path = directory / launcher
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(launcher_script)
+        path.chmod(0o755)
+    (directory / 'kotlinc/lib').mkdir()
+    (directory / 'kotlinc/lib/kotlin-stdlib.jar').write_bytes(make_jar(title='kotlin-stdlib'))
+    (directory / 'stdlib').mkdir()
+    for name in STDLIB_KLIB_NAMES:
+        (directory / 'stdlib' / name).write_bytes(make_klib(abi))
+    manifest = directory / 'native/klib/common/stdlib/default/manifest'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(manifest_text(abi))
+    write_descriptor(directory, build_descriptor(
+        directory, version=version, origin='dev', host='macos-aarch64',
+        backends={'jvm', 'js', 'wasm', 'native'}))
+    return directory
+
+
+def fake_master(root: str | os.PathLike[str], monkeypatch=None, **build) -> Path:
+    """A store under ``root`` whose ``master`` links to a fresh :func:`fake_build`.
+
+    Points ``KOTLIN_COMPILERS_HOME`` at the store (through ``monkeypatch`` when
+    given, else in ``os.environ`` for child processes) and forgets resolved
+    installs; returns the resolved build directory.
+    """
+    layout = Layout(root)
+    layout.ensure()
+    directory = fake_build(layout, **build)
+    layout.set_symlink('master', directory.name)
+    if monkeypatch is None:
+        os.environ[HOME_ENV] = str(layout.root)
+    else:
+        monkeypatch.setenv(HOME_ENV, str(layout.root))
+    store_layout._resolved_install.cache_clear()
+    return directory.resolve()
 
 
 def publish_release(web: FakeWeb, version: str, host: str = 'macos-aarch64', *,

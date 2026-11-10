@@ -14,28 +14,20 @@ def main() -> None:
     sys.argv = ['hephaestus', '--language', 'kotlin', '-P',
                 '--generator-config', str(config), '-b', str(workspace / 'bugs'),
                 '-n', 'session', '-F', str(workspace / 'run.log'), *arguments]
+    from tests.driver.support import ROOT
+    from tests.kotlin_compilers_fakes import fake_master
+    fake_tool = '#!' + sys.executable + '\n' + (ROOT / 'tests/driver/fake_compiler.py').read_text()
+    # The default Kotlin compiler is master; every worker inherits this store.
+    fake_master(workspace / 'compilers', launcher_script=fake_tool)
     # Imports below must remain after argument setup, including with spawn.
     import hephaestus
-    import src.compilers.kotlin as kotlin
-    from tests.driver.support import ROOT
     options = hephaestus.parse_args(sys.argv[1:])
     assert options.test_directory == str(workspace / 'bugs/session')
     tools = workspace / 'tools'
     tools.mkdir(exist_ok=True)
-    kotlinc = tools / 'kotlinc'
-    resolve_executable = kotlin._compiler_executable
-
-    def hermetic_executable(settings: kotlin.KotlinSettings) -> str:
-        # Only default distribution paths are substituted; configured paths still win.
-        executable = resolve_executable(settings)
-        return str(kotlinc) if executable.startswith('$HOME/kotlin/') else executable
-
-    # Serial and forked runs inherit this; spawned workers re-import the adapter.
-    kotlin._compiler_executable = hermetic_executable
     for name in ('kotlinc', 'javac', 'groovyc', 'scalac'):
         executable = tools / name
-        executable.write_text('#!' + sys.executable + '\n' +
-                              (ROOT / 'tests/driver/fake_compiler.py').read_text())
+        executable.write_text(fake_tool)
         executable.chmod(0o755)
     os.environ['PATH'] = str(tools) + os.pathsep + os.environ['PATH']
     os.environ['DRIVER_TOOL_LOG'] = str(workspace / 'tool.jsonl')

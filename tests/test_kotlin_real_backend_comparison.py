@@ -8,23 +8,18 @@ import pytest
 from src.compilers.kotlin import KotlinCompiler
 from src.compilers.results import CompilationRequest
 from src.oracles.backend_comparison import check_backend_compilation
+from tests.real_kotlin import skip_without_master
 from tests.test_backend_comparison import BACKEND_COMPARISON_VARIANTS, application
+
+
+pytestmark = pytest.mark.real_kotlin
 
 
 @pytest.fixture(scope='module')
 def real_kotlin(tmp_path_factory):
     if os.environ.get('HEPHAESTUS_TEST_REAL_KOTLIN') != '1':
         pytest.skip('set HEPHAESTUS_TEST_REAL_KOTLIN=1 for installed Kotlin distributions')
-    from src.compilers.kotlin import _compiler_executable
-    missing = []
-    for settings in BACKEND_COMPARISON_VARIANTS.values():
-        executable = os.path.expandvars(_compiler_executable(settings))
-        library = os.path.expandvars(KotlinCompiler('', settings=settings).stdlib_path())
-        for path in (executable, library):
-            if not os.path.exists(path):
-                missing.append(path)
-    if missing:
-        pytest.skip('missing internally selected Kotlin tools/libraries: ' + ', '.join(missing))
+    skip_without_master(BACKEND_COMPARISON_VARIANTS.values())
     app = application(tmp_path_factory.mktemp('real-backend-comparison'))
     app.mode.preflight(app.compilation)
     return app

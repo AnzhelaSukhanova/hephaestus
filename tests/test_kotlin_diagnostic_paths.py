@@ -7,22 +7,18 @@ import pytest
 
 from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.oracles.compilation import OracleFinding, check_compilation
+from tests.real_kotlin import skip_without_master
+
+
+pytestmark = pytest.mark.real_kotlin
 
 
 @pytest.mark.parametrize('backend', ['native', 'js', 'wasm', 'jvm'])
 @pytest.mark.parametrize('symlink_sources', [False, True])
 def test_module_local_diagnostics_match_absolute_source_paths(
         backend, symlink_sources):
-    distribution = ('kotlin-native/dist' if backend == 'native'
-                    else 'dist/kotlinc')
-    executable = Path.home() / 'kotlin' / distribution / 'bin' / f'kotlinc-{backend}'
-    if not executable.is_file():
-        pytest.skip(f'Kotlin {backend} compiler is not available')
-    settings = KotlinSettings(backend=backend, executable=str(executable))
-    if backend != 'native':
-        stdlib = Path(os.path.expandvars(KotlinCompiler('src', settings=settings).stdlib_path()))
-        if not stdlib.is_file():
-            pytest.skip(f'Kotlin {backend} standard library is not available')
+    settings = KotlinSettings(backend=backend)
+    skip_without_master([settings])
 
     # Resolve the base so macOS's /var alias cannot mask relative diagnostics.
     # Avoid pytest's hyphenated temporary paths, unsupported by the existing parser.

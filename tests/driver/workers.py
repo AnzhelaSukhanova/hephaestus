@@ -8,16 +8,7 @@ from src.modules.worker import WorkerInputs, get_worker_resources
 
 
 def initialize_worker[S](inputs: WorkerInputs[S]) -> None:
-    import src.compilers.kotlin as kotlin
-    kotlinc = str(Path('tools/kotlinc').resolve())
-    resolve_executable = kotlin._compiler_executable
-
-    def hermetic_executable(settings: kotlin.KotlinSettings) -> str:
-        # Spawned workers re-import the adapter, so the runner's substitution is repeated.
-        executable = resolve_executable(settings)
-        return kotlinc if executable.startswith('$HOME/kotlin/') else executable
-
-    kotlin._compiler_executable = hermetic_executable
+    # The runner's fake master store reaches spawned workers through the environment.
     initialize_scheduler_worker(inputs)
     resources = get_worker_resources()
     assert resources.scheduler is not None

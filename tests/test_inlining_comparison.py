@@ -8,9 +8,10 @@ import pytest
 
 from hephaestus import Fuzzer
 from src.args import parse_args, validate_args
-from src.compilers.kotlin import KotlinCompiler, KotlinSettings, _compiler_executable
+from src.compilers.kotlin import KotlinCompiler, KotlinSettings
 from src.generators.config import cfg
 from src.modules.oracle_modes import InliningComparisonMode
+from tests.real_kotlin import skip_without_master
 from tests.test_backend_comparison import configure_variants, fixture_tool
 from tests.test_crossmodule_backend_comparison import case, commit
 from tests.test_kotlin_real_backend_comparison import compile_source
@@ -263,17 +264,13 @@ def test_missing_executable_fails_startup(tmp_path, monkeypatch):
         app.start()
 
 
+@pytest.mark.real_kotlin
 @pytest.mark.parametrize('backend', KLIB_BACKENDS)
 def test_real_compilers_accept_both_inliner_modes_across_modules(tmp_path, backend):
     if os.environ.get('HEPHAESTUS_TEST_REAL_KOTLIN') != '1':
         pytest.skip('set HEPHAESTUS_TEST_REAL_KOTLIN=1 for installed Kotlin distributions')
     app = inlining_application(tmp_path / 'run', backend)
-    missing = [path for settings in app.compilation.settings_by_variant.values()
-               for path in (os.path.expandvars(_compiler_executable(settings)),
-                            os.path.expandvars(KotlinCompiler('', settings=settings).stdlib_path()))
-               if not os.path.exists(path)]
-    if missing:
-        pytest.skip('missing internally selected Kotlin tools/libraries: ' + ', '.join(missing))
+    skip_without_master(app.compilation.settings_by_variant.values())
     app.mode.preflight(app.compilation)
     assert set(app.compilation.versions_by_variant) == set(VARIANT_IDS)
 

@@ -8,6 +8,7 @@ from src.compilers.base import BaseCompiler
 from src.compilers.groovy import GroovyCompiler
 from src.compilers.java import JavaCompiler
 from src.compilers.scala import ScalaCompiler
+from tests.kotlin_compilers_fakes import fake_master
 
 
 def _load_kotlin_compiler(monkeypatch):
@@ -90,11 +91,13 @@ def test_groovy_stack_overflow_without_diagnostic_is_crash():
     assert compiler.crash_msg == output
 
 
-def test_kotlin_phase_enrichment_and_commands(monkeypatch):
+def test_kotlin_phase_enrichment_and_commands(tmp_path, monkeypatch):
+    master = fake_master(tmp_path / "compilers", monkeypatch)
     kotlin_module = _load_kotlin_compiler(monkeypatch)
     compiler = kotlin_module.KotlinCompiler("src")
-    kotlin_command = kotlin_module._compiler_executable(compiler.settings)
     is_native = compiler.settings.backend == "native"
+    kotlin_command = str(master / ("native/bin/kotlinc-native" if is_native
+                                   else f"kotlinc/bin/kotlinc-{compiler.settings.backend}"))
     expected_command = ([kotlin_command, "src",
                          "-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath",
                          "-produce", "library", "-o",
