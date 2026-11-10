@@ -37,6 +37,7 @@ packages = [
   "src.modules",
   "src.oracles",
   "src.tools",
+  "src.tools.kotlin_compilers",
   "src.transformations",
   "src.translators",
 ]

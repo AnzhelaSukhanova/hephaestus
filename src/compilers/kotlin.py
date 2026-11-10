@@ -13,6 +13,7 @@ from urllib.parse import unquote
 
 from src.compilers.base import BaseCompiler
 from src.compilers.results import Diagnostic, ParsedDiagnostics
+from src.tools.kotlin_compilers.layout import master_backend # temporarily wire only master version from ~/kotlin-compilers
 
 
 type KotlinBackend = Literal['js', 'native', 'wasm', 'jvm']
@@ -31,12 +32,12 @@ BACKENDS: tuple[KotlinBackend, ...] = ('js', 'native', 'wasm', 'jvm')
 INLINING_MODES: tuple[InliningMode, ...] = ('disabled', 'intra-module', 'full', 'default')
 
 
-def _compiler_executable(settings: KotlinSettings) -> str:
+def _compiler_launch(settings: KotlinSettings) -> list[str]:
+    """The prefix that starts the compiler: an explicit executable alone, else master's launcher and its args."""
     if settings.executable is not None:
-        return settings.executable
-    distribution = ('kotlin-native/dist' if settings.backend == 'native'
-                    else 'dist/kotlinc')
-    return f'$HOME/kotlin/{distribution}/bin/kotlinc-{settings.backend}'
+        return [settings.executable]
+    entry = master_backend(settings.backend)
+    return [entry['launcher'], *entry['args']]
 
 
 class KotlinCompiler(BaseCompiler[KotlinSettings]):
@@ -87,17 +88,17 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
     def get_compiler_version(
             cls, settings: KotlinSettings = KotlinSettings(),
             scratch_directory: str | None = None) -> list[str]:
-        command = [_compiler_executable(settings), '-version']
+        command = [*_compiler_launch(settings), '-version']
         # The JS and Wasm launchers insist on an output even when only asked for their version.
         if scratch_directory is not None and settings.backend in ('js', 'wasm'):
             command += ['-ir-output-name', 'probe', '-ir-output-dir', scratch_directory]
         return command
 
     def installation_problem(self) -> str | None:
-        executable = os.path.expanduser(os.path.expandvars(_compiler_executable(self.settings)))
+        executable = os.path.expanduser(os.path.expandvars(_compiler_launch(self.settings)[0]))
         if shutil.which(executable) is None:
             return f'missing compiler executable {executable}'
-        library = os.path.expanduser(os.path.expandvars(self.stdlib_path()))
+        library = self.stdlib_path()
         if not os.path.exists(library):
             return f'missing standard library {library}'
         return None
@@ -109,11 +110,10 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
         return self._get_compiler_cmd(self.input_name) + dump_ir_flags
 
     def _get_compiler_cmd(self, input_name: str) -> list[str]:
-        compiler = _compiler_executable(self.settings)
         inputs = ([str(path.resolve()) for path in sorted(Path(input_name).rglob('*.kt'))]
                   if self.klib_output and os.path.isdir(input_name)
                   else [os.path.abspath(input_name)] if self.klib_output else [input_name])
-        command = [compiler, *inputs,
+        command = [*_compiler_launch(self.settings), *inputs,
                    '-J-Dorg.jetbrains.kotlin.cliMessageRenderer=FullPath']
         if self.settings.backend == 'native':
             output_name = self.module_name or input_name
@@ -223,12 +223,7 @@ class KotlinCompiler(BaseCompiler[KotlinSettings]):
             for pattern in self.filter_patterns))
 
     def stdlib_path(self) -> str:
-        if self.settings.backend == 'native':
-            return '$HOME/kotlin/kotlin-native/dist/klib/common/stdlib'
-        if self.settings.backend == 'jvm':
-            return '$HOME/kotlin/dist/kotlinc/lib/kotlin-stdlib.jar'
-        is_wasm = self.settings.backend == 'wasm'
-        return f'$HOME/kotlin/libraries/stdlib/build/libs/kotlin-stdlib-{"wasm-" if is_wasm else ""}js-2.5.255-SNAPSHOT.klib'
+        return master_backend(self.settings.backend)['stdlib']
 
     def _libraries_value(self) -> str:
         libraries = [self.stdlib_path()] + self.dependency_klibs
