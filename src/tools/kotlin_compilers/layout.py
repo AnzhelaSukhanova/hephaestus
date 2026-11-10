@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 import fcntl
+from functools import cache
 import os
 from pathlib import Path
 import shutil
@@ -102,6 +103,21 @@ class Layout:
         temporary.unlink(missing_ok=True)
         os.symlink(version, temporary)
         os.replace(temporary, path)
+
+
+@cache
+def _resolved_install(link: Path) -> tuple[Path, dict | None]:
+    directory = link.resolve()
+    return directory, read_descriptor(directory)
+
+
+def master_backend(backend: str) -> dict:
+    """``master``'s ``compiler.json`` entry for ``backend``, with ``launcher`` and ``stdlib``
+    absolute in the resolved build; resolved once per process and store root."""
+    directory, descriptor = _resolved_install(Layout().compiler_dir('master'))
+    entry = descriptor['backends'][backend]  # sync guarantees master is installed
+    return {**entry, 'launcher': str(directory / entry['launcher']),
+            'stdlib': str(directory / entry['stdlib'])}
 
 
 def install_version(layout: Layout, version: str, *, origin: str, host: str,
