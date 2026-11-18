@@ -80,7 +80,7 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
     printf 'Python not found: %s. Set PYTHON to a Python 3.12+ environment with Hephaestus installed.\n' "$PYTHON" >&2
     exit 1
 fi
-"$PYTHON" -c 'import sys; sys.exit("Python 3.12+ is required") if sys.version_info < (3, 12) else None; import networkx'
+"$PYTHON" -c 'import sys; sys.exit("Python 3.12+ is required") if sys.version_info < (3, 12) else None'
 command -v java >/dev/null || { printf 'java must be on PATH.\n' >&2; exit 1; }
 
 if [[ ${INHIBIT_SLEEP:-1} != 0 ]]; then
