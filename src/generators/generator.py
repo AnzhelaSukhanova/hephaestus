@@ -43,7 +43,7 @@ from src.ir.generation_context import (
 )
 from src.modules.logging import Logger, log
 
-from src.debug_tools import called_by_suffix, call_stack_tail
+from src.debug_tools import call_stack_tail
 
 ContextDeclaration: TypeAlias = (
         ast.FunctionDeclaration | ast.ClassDeclaration | ast.VariableDeclaration |
