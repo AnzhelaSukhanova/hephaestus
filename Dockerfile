@@ -15,13 +15,20 @@
 #
 # Run (fuzzing needs no network; the oracle is chosen at run time, not baked in). The entrypoint
 # is `python -m ci.fuzz`: it stops by itself after --duration (exit 0), on `docker stop` (143) or
-# at duration + --grace (124), and always leaves a complete bugs/<name>/.
+# at duration + --grace (124) or with less than --min-free-disk left (74), and always leaves a
+# complete bugs/<name>/. Workers and compiler heap follow --cpus and --memory (ci/resources.py).
 #   mkdir -p bugs && chmod a+rwx bugs
-#   docker run --rm --network none --cpus 16 --memory 32g \
+#   docker run --rm --network none --cpus 16 --memory 30g \
 #     -v "$PWD/bugs:/opt/hephaestus/bugs" hephaestus:2.5.20-dev-3466 \
 #     backend-comparison --duration 23h
 # Oracles: backend-comparison, inlining-native, inlining-js, inlining-wasm. Pass -e TEAMCITY_VERSION
-# for TeamCity service messages and -e HEPHAESTUS_JAVA_OPTS to change the compiler heap (-Xmx8g).
+# for TeamCity service messages, --workers N to override the worker count and
+# -e HEPHAESTUS_JAVA_OPTS to override the compiler heap.
+#
+# Pack the findings, their programs and provenance (what TeamCity publishes; read-only on bugs/):
+#   mkdir -p results && chmod a+rwx results
+#   docker run --rm --network none --entrypoint python -v "$PWD/bugs:/opt/hephaestus/bugs:ro" \
+#     -v "$PWD/results:/out" hephaestus:2.5.20-dev-3466 -m ci.results --out /out
 #
 # Inspect what an image contains:
 #   docker inspect -f '{{json .Config.Labels}}' hephaestus:2.5.20-dev-3466
@@ -41,21 +48,21 @@ RUN apt-get update \
 ############################ compilers: sync the store once ############################
 FROM base AS compilers
 ARG KOTLIN_MASTER_VERSION=""
-# Only `master` (falling back to prerelease); Hephaestus uses no other compiler.
-ENV KOTLIN_COMPILERS_HOME=/opt/kotlin-compilers \
-    KOTLIN_COMPILERS_VERSIONS=/src/ci/versions.json
+# The repository's versions.json (its master fallback included), but only `master` is
+# installed: Hephaestus uses no other compiler.
+ENV KOTLIN_COMPILERS_HOME=/opt/kotlin-compilers
 WORKDIR /src
 # Only the stdlib-only manager + version list: code changes elsewhere don't re-download compilers.
-COPY ci/versions.json ci/
+COPY versions.json ./
 COPY src/tools/kotlin_compilers/ src/tools/kotlin_compilers/
 # Docker can't see new GitHub releases, so builds use --no-cache (see header).
 RUN echo "master=${KOTLIN_MASTER_VERSION:-<fallback: prerelease>}" \
  && KOTLIN_MASTER_VERSION="${KOTLIN_MASTER_VERSION}" \
-    python3 src/tools/kotlin_compilers/manage.py --host linux-x86_64 sync \
- && python3 src/tools/kotlin_compilers/manage.py list \
+    python3 src/tools/kotlin_compilers/manage.py --host linux-x86_64 sync master \
+ && python3 src/tools/kotlin_compilers/manage.py list master \
  && echo "Installed Kotlin master: $(basename "$(readlink -f "$KOTLIN_COMPILERS_HOME/master")")"
 # Smoke test with networking disabled: proves Native stays first-stage (no LLVM download).
-RUN --network=none python3 src/tools/kotlin_compilers/manage.py check
+RUN --network=none python3 src/tools/kotlin_compilers/manage.py check master
 
 ############################ runtime ############################
 FROM base AS runtime
