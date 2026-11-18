@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-import fcntl
 from functools import cache
 import os
 from pathlib import Path
 import shutil
 import tempfile
+
+from filelock import FileLock
 
 from .descriptor import (
     DESCRIPTOR, DescriptorError, backends_on_disk, build_descriptor, parts_for,
@@ -48,12 +49,8 @@ class Layout:
     def locked(self) -> Iterator[None]:
         """Hold ``state/sync.lock``; a concurrent sync waits here."""
         self.ensure()
-        with open(self.lock, 'a') as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+        with FileLock(self.lock, preserve_lock_file=True, fallback_to_soft=False):
+            yield
 
     def ensure(self) -> None:
         self.tmp.mkdir(parents=True, exist_ok=True)

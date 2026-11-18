@@ -20,7 +20,9 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = [
+    "filelock>=3.30",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "coverage>=7.10", "pyright>=1.1.400"]

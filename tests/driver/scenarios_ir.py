@@ -1,6 +1,5 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
-import fcntl
 import json
 from pathlib import Path
 import shutil
@@ -9,6 +8,7 @@ from unittest.mock import patch
 import zipfile
 
 import pytest
+from filelock import FileLock
 
 from src.modules import artifacts
 from src.tools import ir_coverage
@@ -115,9 +115,9 @@ class JavaExecution:
 
 
 def assert_unlocked(root: Path) -> None:
-    with (root / '.merge.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(lock, fcntl.LOCK_UN)
+    with FileLock(root / '.merge.lock', timeout=0,
+                  preserve_lock_file=True, fallback_to_soft=False):
+        pass
 
 
 def merge() -> None:

@@ -1,9 +1,10 @@
 from collections.abc import Mapping
-import fcntl
 import os
 from pathlib import Path
 import shutil
 import tempfile
+
+from filelock import FileLock
 
 from src import utils
 from src.modules.compilation import Compilation
@@ -49,24 +50,21 @@ class LiveCoverage[S]:
         # Serialize merge + report generation across worker processes: several
         # pids can finish a live-Jacoco compile at roughly the same time, and
         # jacococli.jar has no cross-process coordination of its own.
-        with open(self._jacoco_merge_lock_path(output_dir), 'w') as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-            try:
-                exec_dir = output_dir / 'execs'
-                pending = sorted(exec_dir.glob('*.exec'))
-                if not pending:
-                    return
-                trunk = output_dir / 'jacoco.exec'
-                inputs = ([trunk] if trunk.exists() else []) + pending
-                merged = output_dir / 'jacoco.exec.new'
-                merge_exec_files(inputs, merged)
-                os.replace(merged, trunk)
-                for exec_file in pending:
-                    exec_file.unlink()
-                write_jacoco_report(output_dir, output_dir / 'classes',
-                                   self.options.backend)
-            finally:
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
+        with FileLock(self._jacoco_merge_lock_path(output_dir),
+                      preserve_lock_file=True, fallback_to_soft=False):
+            exec_dir = output_dir / 'execs'
+            pending = sorted(exec_dir.glob('*.exec'))
+            if not pending:
+                return
+            trunk = output_dir / 'jacoco.exec'
+            inputs = ([trunk] if trunk.exists() else []) + pending
+            merged = output_dir / 'jacoco.exec.new'
+            merge_exec_files(inputs, merged)
+            os.replace(merged, trunk)
+            for exec_file in pending:
+                exec_file.unlink()
+            write_jacoco_report(output_dir, output_dir / 'classes',
+                               self.options.backend)
 
     def maybe_run_live_jacoco(
             self, pid: int, phase_changes: Mapping[str, int | None] | None
