@@ -56,6 +56,14 @@ def _json_default(value: object) -> object:
     raise TypeError(f'Object of type {type(value).__name__} is not JSON serializable')
 
 
+def _dump_json(path: str, data: object, **kwargs: Any) -> None:
+    """Write ``data`` next to ``path`` and rename it into place, so a reader in
+    another process (the CI results collector) never sees a half-written file."""
+    with open(path + '.tmp', 'w') as out:
+        json.dump(data, out, **kwargs)
+    os.replace(path + '.tmp', path)
+
+
 class TimingMetrics:
     def __init__(self, options: RunOptions) -> None:
         self.options = options
@@ -144,18 +152,13 @@ class Reporting(TimingMetrics):
         inconclusive = self.stats.pop('inconclusive')
         escalations = self.stats.pop('escalations')
         time_metrics = self.stats.pop('time_metrics')
-        with open(faults_file, 'w') as out:
-            json.dump(faults, out, indent=2, default=_json_default)
-        with open(inconclusive_file, 'w') as out:
-            json.dump(inconclusive, out, indent=2, default=_json_default)
+        _dump_json(faults_file, faults, indent=2, default=_json_default)
+        _dump_json(inconclusive_file, inconclusive, indent=2, default=_json_default)
         if not self.options.disable_metrics:
-            with open(escalations_file, 'w') as out:
-                json.dump(escalations, out, indent=2)
+            _dump_json(escalations_file, escalations, indent=2)
         if self.options.time_metrics:
-            with open(time_metrics_file, 'w') as out:
-                json.dump(time_metrics, out, indent=2)
-        with open(stats_file, 'w') as out:
-            json.dump(self.stats, out, indent=2)
+            _dump_json(time_metrics_file, time_metrics, indent=2)
+        _dump_json(stats_file, self.stats, indent=2)
         self.stats['faults'] = faults
         self.stats['inconclusive'] = inconclusive
         self.stats['escalations'] = escalations
