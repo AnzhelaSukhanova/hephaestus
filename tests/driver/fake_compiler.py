@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import zipfile
 
@@ -22,7 +23,13 @@ def main() -> int:
               else 'wasm' if any('kotlin-stdlib-wasm-' in argument
                                  for argument in arguments) else 'js')
     crash_targets = os.environ.get('DRIVER_CRASH_TARGETS')
-    if mode == 'crash' and (crash_targets is None or target in crash_targets.split(',')):
+    # Crash only programs src/d<pid> with pid divisible by this, so the others pass
+    # (and cross-module runs publish them as dependencies).
+    modulo = int(os.environ.get('DRIVER_CRASH_MODULO', '1'))
+    pids = [int(match) for argument in arguments
+            for match in re.findall(r'[/\\]d(\d+)[/\\]', argument)]
+    if (mode == 'crash' and (crash_targets is None or target in crash_targets.split(','))
+            and (modulo == 1 or any(pid % modulo == 0 for pid in pids[:1]))):
         print('org.jetbrains.kotlin.CompilerException\ncontrolled crash')
         return 2
     sources: list[Path] = []
