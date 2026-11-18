@@ -1,4 +1,4 @@
-"""Headless CI entry: ``python -m ci.fuzz <oracle> [--duration 23h] [--workers 4]``.
+"""Headless CI entry: ``python -m ci.fuzz <oracle> [--duration 23h] [--workers auto]``.
 
 Builds the Hephaestus options for one oracle and runs a :class:`HeadlessFuzzer`:
 nothing prompts, Hephaestus's own output goes to a console log, and the build
@@ -7,6 +7,11 @@ log gets a heartbeat line per interval plus a final summary.
 A run ends when its time budget runs out (exit 0), on SIGTERM (143), or when it
 is still running at budget + grace (watchdog, 124). The last two take the same
 path as Ctrl-C, so the scheduler stops its workers and cleans up as usual.
+So does running low on disk (74), checked at every heartbeat.
+
+By default the number of workers and the compiler heap follow the CPUs and
+memory the process may use (see ``ci.resources``); the choice is printed and
+recorded in ``<run>/resources.json`` together with the measured peaks.
 """
 from __future__ import annotations
 
@@ -14,15 +19,18 @@ import argparse
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 import io
+import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import sys
 import time
 from types import FrameType
 from typing import TextIO
 
+from ci import resources
 from hephaestus import Fuzzer
 from src.args import configure_generator, parse_args
 from src.tools.kotlin_compilers.layout import Layout
@@ -40,9 +48,9 @@ ORACLES: dict[str, list[str]] = {
     'inlining-wasm': ['--oracle', 'inlining-comparison', '--backend', 'wasm'],
 }
 
-EXIT_CODES = {'budget': 0, 'sigterm': 143, 'watchdog': 124}
+EXIT_CODES = {'budget': 0, 'sigterm': 143, 'watchdog': 124, 'disk': 74}
 STOP_REASONS = {'budget': 'time budget used up', 'sigterm': 'stopped by SIGTERM',
-                'watchdog': 'stopped by the watchdog'}
+                'watchdog': 'stopped by the watchdog', 'disk': 'stopped: disk almost full'}
 SIGNALS = {signal.SIGTERM, signal.SIGALRM}
 TEAMCITY_ESCAPES = str.maketrans({'|': '||', "'": "|'", '\n': '|n', '\r': '|r',
                                   '[': '|[', ']': '|]'})
@@ -102,11 +110,12 @@ class HeadlessFuzzer(Fuzzer):
     """
 
     def __init__(self, options: argparse.Namespace, *, heartbeat: int, grace: int,
-                 out: TextIO) -> None:
+                 out: TextIO, min_free_disk: int = 0) -> None:
         super().__init__(options)
         self.heartbeat = heartbeat
         self.grace = grace
         self.out = out
+        self.min_free_disk = min_free_disk
         self.stop_reason = 'budget'
         self.started = False
         self.elapsed = 0.0
@@ -198,9 +207,17 @@ class HeadlessFuzzer(Fuzzer):
         if elapsed >= (self._beats + 1) * self.heartbeat:
             self._beats = int(elapsed // self.heartbeat)
             self._heartbeat(elapsed)
+            free = self.free_disk()
+            if free < self.min_free_disk and self._accepting_stops:
+                self._write(f'Only {free / resources.GIB:.1f} GiB free under '
+                            f'{self.options.bugs}, stopping')
+                self.request_stop('disk')
         if elapsed >= self.options.seconds + self.grace:
             self.request_stop('watchdog')
         self._arm_timer()
+
+    def free_disk(self) -> int:
+        return shutil.disk_usage(self.options.bugs).free
 
     def _arm_timer(self) -> None:
         """One-shot timer for the next heartbeat or the watchdog deadline."""
@@ -245,8 +262,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('oracle', choices=list(ORACLES))
     parser.add_argument('--duration', type=parse_duration, default='23h',
                         help='Time budget, e.g. 23h, 90m or 45s (default: 23h)')
-    parser.add_argument('--workers', type=int, default=4,
-                        help='Number of Hephaestus workers (default: 4)')
+    parser.add_argument('--workers', type=parse_workers, default=None, metavar='N|auto',
+                        help='Number of Hephaestus workers (default: auto, from the CPUs '
+                             'and memory available)')
+    parser.add_argument('--min-free-disk', type=parse_size, default='2G',
+                        help='Stop when the bugs folder has less free disk; refuse to start '
+                             'with less than twice as much (default: 2G)')
     parser.add_argument('--heartbeat', type=parse_duration, default='5m',
                         help='Interval between progress lines (default: 5m)')
     parser.add_argument('--grace', type=parse_duration, default='15m',
@@ -254,6 +275,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--strip-pickles', action='store_true',
                         help='Remove the *.bin pickles under the run directory afterwards')
     return parser
+
+
+def parse_workers(value: str) -> int | None:
+    if value == 'auto':
+        return None
+    if not value.isdigit() or int(value) < 1:
+        raise argparse.ArgumentTypeError(f'invalid worker count {value!r}: use auto or N >= 1')
+    return int(value)
+
+
+def parse_size(value: str) -> int:
+    try:
+        return resources.parse_size(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+def write_json(path: Path, value: object) -> None:
+    path.with_name(path.name + '.tmp').write_text(json.dumps(value, indent=2))
+    path.with_name(path.name + '.tmp').replace(path)
 
 
 def strip_pickles(run_directory: str) -> int:
@@ -266,12 +307,46 @@ def strip_pickles(run_directory: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     name = run_name(args.oracle, master_version())
-    options = parse_args(hephaestus_arguments(args.oracle, args.duration, args.workers, name))
+    bugs = Path('bugs').resolve()
+    bugs.mkdir(parents=True, exist_ok=True)
+    found = resources.detect(bugs)
+    # Empty counts as unset: step 2 passes the variable through even when TeamCity leaves it empty.
+    chosen = resources.plan(found, args.workers, os.environ.get('HEPHAESTUS_JAVA_OPTS') or None)
+    print(f'{name}: {resources.describe(found, chosen)}', flush=True)
+    for warning in chosen.warnings:
+        print(f'warning: {warning}', flush=True)
+    record = resources.record(found, chosen, args.min_free_disk)
+    if found.free_disk_bytes < 2 * args.min_free_disk:
+        print(f'{name}: refusing to start with {found.free_disk_bytes / resources.GIB:.1f} GiB '
+              f'free under {bugs}; need {2 * args.min_free_disk / resources.GIB:.1f} GiB',
+              flush=True)
+        return EXIT_CODES['disk']
+    # Every compiler call (in every worker) reads it; see src/modules/compilation.py.
+    os.environ['HEPHAESTUS_JAVA_OPTS'] = chosen.java_opts
+    options = parse_args(hephaestus_arguments(args.oracle, args.duration, chosen.workers, name))
     configure_generator(options)
     fuzzer = HeadlessFuzzer(options, heartbeat=args.heartbeat, grace=args.grace,
-                            out=sys.stdout)
-    fuzzer.start()
+                            out=sys.stdout, min_free_disk=args.min_free_disk)
+    # Next to the console log while running, so checkpoints can already read it.
+    pending = Path(options.bugs) / f'{name}.resources.json'
+    write_json(pending, record)
+    try:
+        fuzzer.start()
+    finally:
+        # After start(): the workers, and the compilers they waited for, have exited.
+        record['measured'] = resources.measured_peaks()
+        run_directory = Path(options.test_directory)
+        if fuzzer.started and run_directory.is_dir():
+            write_json(run_directory / 'resources.json', record)
+            pending.unlink()
+        else:
+            write_json(pending, record)
     fuzzer.report()
+    if os.environ.get('TEAMCITY_VERSION'):
+        for key, value in record['measured'].items():
+            if value is not None:
+                print(service_message('buildStatisticValue', key=f'hephaestus.memory.{key}',
+                                      value=value), flush=True)
     if args.strip_pickles and os.path.isdir(options.test_directory):
         print(f'Removed {strip_pickles(options.test_directory)} pickles', flush=True)
     return EXIT_CODES[fuzzer.stop_reason]
