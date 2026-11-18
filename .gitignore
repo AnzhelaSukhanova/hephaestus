@@ -149,3 +149,6 @@ dmypy.json
 src/.DS_Store
 script.sh
 /coverage/
+
+# Keep the compiler versions file in version control.
+!/versions.json

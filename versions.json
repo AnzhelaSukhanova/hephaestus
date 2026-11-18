@@ -1,0 +1,9 @@
+{
+  "versions": [
+    "master",
+    "2.3.21-native"
+  ],
+  "fallbacks": {
+    "master": "prerelease"
+  }
+}
