@@ -5,7 +5,8 @@
 The fake compiler is ``tests/driver/fake_compiler.py``; for anything but a version
 probe it first sleeps ``CI_FUZZ_COMPILER_DELAY`` seconds, either always
 (``CI_FUZZ_SLOW=always``) or once the run's console log has content, i.e. once
-the scheduler has started (``CI_FUZZ_SLOW=running``).
+the scheduler has started (``CI_FUZZ_SLOW=running``). With ``CI_FUZZ_JAVA_OPTS_LOG``
+set, every call appends the ``JAVA_OPTS`` it was given to that file.
 """
 import os
 from pathlib import Path
@@ -13,6 +14,9 @@ import sys
 
 
 DELAY = '''import glob, os, sys, time
+if os.environ.get('CI_FUZZ_JAVA_OPTS_LOG'):
+    with open(os.environ['CI_FUZZ_JAVA_OPTS_LOG'], 'a') as _log:
+        _log.write(os.environ.get('JAVA_OPTS', '') + '\\n')
 _slow = os.environ.get('CI_FUZZ_SLOW')
 if '-version' not in sys.argv and (_slow == 'always' or _slow == 'running' and any(
         os.path.getsize(path) for path in glob.glob(os.environ['CI_FUZZ_CONSOLE_LOGS']))):

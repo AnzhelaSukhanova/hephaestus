@@ -89,7 +89,8 @@ def failed_write() -> None:
     try:
         reporting.save_stats()
     except IsADirectoryError as error:
-        assert error.filename == str(root / 'faults.json')
+        # Result files are renamed into place: os.replace names the target second.
+        assert error.filename2 == str(root / 'faults.json')
     else:
         raise AssertionError('Expected the filesystem write to fail')
     if reporting.stats == before:

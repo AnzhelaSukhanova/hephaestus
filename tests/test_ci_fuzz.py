@@ -183,11 +183,24 @@ def assert_complete_results(run_directory: Path) -> dict:
     return json.loads((run_directory / 'stats.json').read_text())
 
 
-def test_budget_end_exits_0_with_heartbeat_summary_and_service_messages(launch):
+def test_budget_end_exits_0_with_heartbeat_summary_and_service_messages(launch, tmp_path):
     run = launch('backend-comparison', '--duration', '2s', '--heartbeat', '1s',
-                 '--workers', '2', '--strip-pickles', TEAMCITY_VERSION='2025.11')
+                 '--workers', '2', '--strip-pickles', TEAMCITY_VERSION='2025.11',
+                 CI_FUZZ_JAVA_OPTS_LOG=str(tmp_path / 'java-opts.txt'))
     assert run.wait() == 0, run.out
     run_directory = run.run_directory()
+    sizing = json.loads((run_directory / 'resources.json').read_text())
+    assert sizing['plan']['workers'] == 2 and sizing['plan']['workers_source'] == 'option'
+    java_opts = sizing['plan']['java_opts']
+    assert re.fullmatch(r'-Xmx\d+m', java_opts)
+    # Every compiler call, in every worker, got the chosen heap.
+    assert set((tmp_path / 'java-opts.txt').read_text().split('\n')) - {''} == {java_opts}
+    assert sizing['measured']['largest_process_rss_bytes'] > 0
+    assert re.search(r'^kotlin-\S+: [\d.]+ CPUs \([^)]+\), .* 2 worker\(s\) \(option\), '
+                     r'compiler JAVA_OPTS ' + java_opts, run.out, re.M)
+    assert ("##teamcity[buildStatisticValue key='hephaestus.memory.largest_process_rss_bytes'"
+            in run.out)
+    assert not list(run.bugs.glob('*.resources.json'))
     assert run_directory.name.startswith('kotlin-2.5.20-dev-1-backend-comparison-')
     stats = assert_complete_results(run_directory)
     totals = stats['totals']
@@ -235,10 +248,34 @@ def test_sigterm_during_the_preflight_leaves_no_results(launch):
     run.wait_for(lambda: '[0:00:01]' in run.out)
     run.process.send_signal(signal.SIGTERM)
     assert run.wait(timeout=15) == 143, run.out
-    [console_log] = run.bugs.iterdir()
+    console_log, sizing = sorted(run.bugs.iterdir())
     assert console_log.name.endswith('.console.log')
     assert console_log.read_text() == ''
+    # No run folder yet: the resources record stays next to the console log.
+    assert sizing.name == console_log.name.replace('.console.log', '.resources.json')
+    assert json.loads(sizing.read_text())['plan']['workers_source'] == 'auto'
     assert ': stopped by SIGTERM after ' in run.out
+
+
+def test_refuses_to_start_without_free_disk(launch):
+    run = launch('backend-comparison', '--duration', '1h', '--min-free-disk', '1000000G')
+    assert run.wait() == 74, run.out
+    assert ': refusing to start with ' in run.out
+    assert not run.bugs.exists() or not list(run.bugs.iterdir())
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'two', '1.5'])
+def test_bad_worker_count_exits_2(value, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        fuzz.main(['backend-comparison', '--workers', value])
+    assert exit_info.value.code == 2
+    assert 'invalid worker count' in capsys.readouterr().err
+
+
+def test_workers_default_to_auto():
+    args = fuzz.build_parser().parse_args(['backend-comparison'])
+    assert args.workers is None and args.min_free_disk == 2 * 1024 ** 3
+    assert fuzz.build_parser().parse_args(['backend-comparison', '--workers', '3']).workers == 3
 
 
 # HeadlessFuzzer in-process.
@@ -289,6 +326,25 @@ def test_only_the_first_stop_request_raises(tmp_path):
     assert fuzzer.stop_reason == 'sigterm'
 
 
+def test_low_disk_stops_at_the_heartbeat(tmp_path, monkeypatch):
+    out = io.StringIO()
+    fuzzer = fuzz.HeadlessFuzzer(headless(tmp_path, out).options, heartbeat=1, grace=60,
+                                 out=out, min_free_disk=2 * 1024 ** 3)
+    monkeypatch.setattr(fuzzer, 'free_disk', lambda: 1024 ** 3)
+    monkeypatch.setattr(fuzzer, '_arm_timer', lambda: None)
+    fuzzer._start_time = time.monotonic() - 1.5
+    fuzzer._accepting_stops = True
+    with pytest.raises(KeyboardInterrupt):
+        fuzzer._on_alarm(signal.SIGALRM, None)
+    assert fuzzer.stop_reason == 'disk'
+    assert 'Only 1.0 GiB free under ' in out.getvalue()
+    assert fuzz.EXIT_CODES['disk'] == 74
+    # Once stopping, later heartbeats neither repeat the message nor raise again.
+    fuzzer._start_time -= 1
+    fuzzer._on_alarm(signal.SIGALRM, None)
+    assert out.getvalue().count('Only 1.0 GiB free') == 1
+
+
 def test_stats_are_saved_with_stop_signals_blocked(tmp_path):
     fuzzer = headless(tmp_path, io.StringIO())
     masks = []
@@ -316,15 +372,16 @@ def test_failed_start_keeps_its_error_and_restores_the_process(tmp_path):
     assert list((tmp_path / 'bugs' / 'run').iterdir()) == []
 
 
-# The CI image's compiler store: ci/versions.json.
+# The CI image's compiler store: the repository's versions.json, but `sync master` only.
 
 def test_ci_versions_install_only_master_falling_back_to_prerelease(web, layout, monkeypatch):
     monkeypatch.delenv('KOTLIN_MASTER_VERSION', raising=False)
-    version_list = load_versions(ROOT / 'ci' / 'versions.json')
-    assert [selector.text for selector in version_list.selectors] == ['master']
+    version_list = load_versions(ROOT / 'versions.json')
+    assert 'master' in [selector.text for selector in version_list.selectors]
+    assert version_list.fallbacks == {'master': 'prerelease'}
     publish_release(web, '2.5.0-Beta2', abi='2.5.0', wasm_launcher=True)
     web.feed('v2.5.0-Beta2', 'v2.4.21')
-    assert sync(layout, version_list, HOST) == 0
+    assert sync(layout, version_list, HOST, ['master']) == 0
     assert layout.installed_versions() == ['2.5.0-Beta2']
     assert layout.symlink_target('master') == '2.5.0-Beta2'
     assert list(layout.descriptor('2.5.0-Beta2')['backends']) == ['jvm', 'js', 'wasm', 'native']
