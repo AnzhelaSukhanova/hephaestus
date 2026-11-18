@@ -104,8 +104,10 @@ def write_divergences(run_dir: str,
     if faults is None:
         faults = read_report(os.path.join(run_dir, 'faults.json'))
     path = os.path.join(run_dir, DIVERGENCES_FILE)
-    with open(path, 'w') as out:
+    # Renamed into place: the CI results collector may read it during the run.
+    with open(path + '.tmp', 'w') as out:
         out.write(render_divergences(faults))
+    os.replace(path + '.tmp', path)
     return path
 
 
