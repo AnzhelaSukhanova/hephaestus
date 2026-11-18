@@ -343,19 +343,24 @@ class Generator:
                 # To protect from someone setting, 0 probability of unknowns, as local func can't be private/public
                 visibility = ast.Visibilities.UNKNOWN
             else:
-                visibility = ut.random.r.choices(
-                    population=[
-                        ast.Visibilities.PUBLIC,
-                        ast.Visibilities.PRIVATE,
-                        ast.Visibilities.UNKNOWN,
-                    ],
-                    weights=[
-                        cfg.prob.function_visibility.public,
-                        cfg.prob.function_visibility.private if not (
-                                    abstract or is_interface or declared_as_override or nested_function) else 0,
-                        cfg.prob.function_visibility.not_specified,
-                    ]
-                )[0]
+                weights = [
+                    cfg.prob.function_visibility.public,
+                    cfg.prob.function_visibility.private if not (
+                        abstract or is_interface or declared_as_override or nested_function
+                    ) else 0,
+                    cfg.prob.function_visibility.not_specified,
+                ]
+                # If no allowed visibility has weight, leave it unspecified.
+                visibility = ast.Visibilities.UNKNOWN
+                if any(weights):
+                    visibility = ut.random.r.choices(
+                        population=[
+                            ast.Visibilities.PUBLIC,
+                            ast.Visibilities.PRIVATE,
+                            ast.Visibilities.UNKNOWN,
+                        ],
+                        weights=weights,
+                    )[0]
         else:
             if nested_function:
                 assert visibility == ast.Visibilities.UNKNOWN, "Local functions can't be private/public"
@@ -1021,18 +1026,22 @@ class Generator:
         name = self._gen_name('lower')
 
         if visibility is None:
-            visibility = ut.random.r.choices(
-                population=[
-                    ast.Visibilities.PUBLIC,
-                    ast.Visibilities.PRIVATE,
-                    ast.Visibilities.UNKNOWN,
-                ],
-                weights=[
-                    cfg.prob.property_visibility.public,
-                    cfg.prob.property_visibility.private if not declared_as_override else 0,
-                    cfg.prob.property_visibility.not_specified,
-                ]
-            )[0]
+            weights = [
+                cfg.prob.property_visibility.public,
+                cfg.prob.property_visibility.private if not declared_as_override else 0,
+                cfg.prob.property_visibility.not_specified,
+            ]
+            # If no allowed visibility has weight, leave it unspecified.
+            visibility = ast.Visibilities.UNKNOWN
+            if any(weights):
+                visibility = ut.random.r.choices(
+                    population=[
+                        ast.Visibilities.PUBLIC,
+                        ast.Visibilities.PRIVATE,
+                        ast.Visibilities.UNKNOWN,
+                    ],
+                    weights=weights,
+                )[0]
 
         is_locally_open = (
                 visibility.resolve() != ast.Visibilities.PRIVATE and
