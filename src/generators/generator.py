@@ -465,14 +465,8 @@ class Generator:
             self.inline_functions.add(func)
             if required_inline_call_source is not None:
                 target_node = (func, IrFunctionBodyStub())
-                if not self.inline_call_graph.add_edge(
-                        required_inline_call_source, target_node):
-                    source_func, source_location = required_inline_call_source
-                    target_func, target_location = target_node
-                    raise AssertionError(
-                        "Inline-cycle invariant violated while registering "
-                        f"{source_func.name!s}[{source_location!r}] -> "
-                        f"{target_func.name!s}[{target_location!r}]")
+                assert self.inline_call_graph.add_edge(
+                    required_inline_call_source, target_node)
 
         # We generate default value expressions after func exists, so inline source
         # tracking works for inline functions with defaults calling other inline functions
@@ -1166,13 +1160,7 @@ class Generator:
         assert source is not None
         target_location = target_param_name if target_param_name is not None else IrFunctionBodyStub()
         target = (callee, target_location)
-        if not self.inline_call_graph.add_edge(source, target):
-            source_func, source_location = source
-            target_func, target_location = target
-            raise AssertionError(
-                "Inline-cycle invariant violated while recording "
-                f"{source_func.name!s}[{source_location!r}] -> "
-                f"{target_func.name!s}[{target_location!r}]")
+        assert self.inline_call_graph.add_edge(source, target)
 
     ## CHECKERS FROM EXTENDING GENERATION CAPABILITIES ##
     # TODO: Lambdas must be considered separately, they have complex interactions with local context
