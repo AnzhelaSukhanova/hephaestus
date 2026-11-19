@@ -152,3 +152,10 @@ script.sh
 
 # Keep the compiler versions file in version control.
 !/versions.json
+
+# Expose only the pickle investigation reference under the locally excluded tools/ tree.
+!/tools/
+/tools/*
+!/tools/investigations/
+/tools/investigations/*
+!/tools/investigations/pickle_investigator.py
