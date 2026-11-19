@@ -1,5 +1,8 @@
 # pylint: disable=dangerous-default-value
-from typing import List, Set, Union
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Collection, Dict, List, Mapping, Optional, Set, Union
 from copy import deepcopy
 
 import src.ir.type_utils as tu
@@ -8,6 +11,7 @@ from src import utils
 from src.ir import BUILTIN_FACTORIES
 from src.ir.builtins import BuiltinFactory, FunctionType
 from src.ir.node import Node
+from enum import Enum, auto
 
 
 GLOBAL_NAMESPACE = ('global',)
@@ -30,6 +34,44 @@ class Expr(Node):
     pass
 
 
+class EnforceTypeViaCast(Expr):
+    """An expression whose static type is enforced by an explicit cast.
+
+    When we need a guarantee that a type of expression will be derived as
+    Hephaestus believes it to be, we need to cast to the Hephaestus type
+    explicitly inside Kotlin.
+
+    For now, used only for receiver dispatch coherence in Kotlin
+    (for inline cycles detection)
+    """
+
+    def __init__(self, expr: Expr, target_type: types.Type):
+        self.expr = expr
+        self.target_type = target_type
+
+    def children(self):
+        return [self.expr]
+
+    def update_children(self, children):
+        super().update_children(children)
+        self.expr = children[0]
+
+    def get_type(self):
+        return self.target_type
+
+    def is_bottom(self):
+        return self.expr.is_bottom()
+
+    def __str__(self):
+        return "EnforceTypeViaCast({}, {})".format(
+            self.expr, self.target_type)
+
+    def is_equal(self, other):
+        return (isinstance(other, EnforceTypeViaCast) and
+                self.target_type == other.target_type and
+                self.expr.is_equal(other.expr))
+
+
 class Program(Node):
     # Set default value to kotlin for backward compatibility
     def __init__(self, context, language):
@@ -37,9 +79,9 @@ class Program(Node):
         self.language = language
         self.bt_factory: BuiltinFactory = BUILTIN_FACTORIES[language]
 
-    def children(self):
-        return self.context.get_declarations(GLOBAL_NAMESPACE,
-                                             only_current=True).values()
+    def children(self) -> Collection[Declaration]:
+        # For translation and transformation
+        return self.get_current_module_declarations().values()
 
     def update_children(self, children):
         super().update_children(children)
@@ -47,16 +89,55 @@ class Program(Node):
             self.add_declaration(c)
 
     @property
-    def declarations(self):
-        # Get declarations as list
-        return self.get_declarations().values()
+    def _declarations(self) -> Collection[Declaration]:
+        """Unfiltered view into declarations"""
+        return self._get_all_declarations().values()
 
-    def get_declarations(self):
-        return self.context.get_declarations(GLOBAL_NAMESPACE,
-                                             only_current=True)
+    @property
+    def target_module(self):
+        return self.context.target_module
+
+    def _get_all_declarations(self) -> Mapping[str, Declaration]:
+        return self.context.get_declarations(
+            GLOBAL_NAMESPACE, only_current=True)
+
+    def get_current_module_declarations(self) -> Mapping[str, Declaration]:
+        """Declarations defined in this module"""
+        declarations = self._get_all_declarations()
+        if not self.target_module:
+            return declarations
+        return {
+            name: decl for name, decl in declarations.items()
+            if self.context.name_is_local(name)
+        }
+
+    def get_foreign_module_declarations(self) -> Dict[str, Declaration]:
+        """Imported declarations from other modules"""
+        if not self.target_module:
+            return {}
+        return {
+            name: decl
+            for name, decl in self._get_all_declarations().items()
+            if not self.context.name_is_local(name)
+        }
+
+    def get_exported_names(self) -> List[str]:
+        """The top-level names another module may use."""
+        return [
+            str(name)
+            for name, decl in self.get_current_module_declarations().items()
+            if decl.can_cross_module_boundary()
+        ]
 
     def get_types(self):
-        usr_types = [d for d in self.declarations
+        # If local classes are supported, we need to populate types
+        # with nested imported classes.
+
+        # It also needs unfiltered access to declarations. Even though
+        # they are not emitted, transformations still use them
+        # as they rely on full knowledge of types.
+
+        usr_types = [d for d in self._declarations
                      if isinstance(d, ClassDeclaration)]
         ttypes = usr_types + self.bt_factory.get_non_nothing_types()
         new_types = []
@@ -66,59 +147,16 @@ class Program(Node):
             new_types.append(t)
         return new_types
 
-    def update_declarations(self, decls):
-        self.context._context[GLOBAL_NAMESPACE]['decls'] = decls
-
-    def _add_function(self, namespace, func):
-        self.context.add_func(namespace, func.name, func)
-        namespace = namespace + (func.name,)
-        for p in func.params:
-            self.context.add_var(namespace, p.name, p)
-        if not func.body or not isinstance(func.body, Block):
-            return
-        stack = list(func.body.body)
-        while stack:
-            s = stack.pop()
-            if isinstance(s, VariableDeclaration):
-                self.context.add_var(namespace, s.name, s)
-
-            if isinstance(s, FunctionDeclaration):
-                self._add_function(namespace, s)
-
-            if isinstance(s, Conditional):
-                stack.append(s.true_branch)
-                stack.append(s.false_branch)
-
-            if isinstance(s, Block):
-                stack.extend(s.body)
-
-    def _add_class(self, namespace, class_decl):
-        namespace = namespace + (class_decl.name,)
-        for f in class_decl.fields:
-            self.context.add_var(namespace, f.name, f)
-        for f in class_decl.functions:
-            self._add_function(namespace, f)
+    def update_declarations(self, new_this_module_declarations):
+        new_all_declarations = self.get_foreign_module_declarations()
+        new_all_declarations.update(new_this_module_declarations)
+        self.context.update_declarations(new_all_declarations)
 
     def add_declaration(self, decl):
-        decl_types = {
-            FunctionDeclaration: self.context.add_func,
-            ClassDeclaration: self.context.add_class,
-            VariableDeclaration: self.context.add_var,
-        }
-        decl_types[decl.__class__](GLOBAL_NAMESPACE, decl.name, decl)
-        if isinstance(decl, ClassDeclaration):
-            self._add_class(GLOBAL_NAMESPACE, decl)
-
-        if isinstance(decl, FunctionDeclaration):
-            self._add_function(GLOBAL_NAMESPACE, decl)
+        return self.context.add_declaration(decl)
 
     def remove_declaration(self, decl):
-        decl_types = {
-            FunctionDeclaration: self.context.remove_func,
-            ClassDeclaration: self.context.remove_class,
-            VariableDeclaration: self.context.remove_var,
-        }
-        decl_types[decl.__class__](GLOBAL_NAMESPACE, decl.name)
+        return self.context.remove_declaration(decl)
 
     def __str__(self):
         return "\n\n".join(map(str, self.children()))
@@ -149,10 +187,97 @@ class Block(Node):
             return check_list_eq(self.body, other.body)
         return False
 
+class CanCrossModuleBoundary(Enum):
+    UNKNOWN = auto()
+    ALWAYS = auto()
+    AS_FRIEND_MODULE = auto()
+    NEVER = auto()
+
+@dataclass(frozen=True)
+class Visibility:
+    """
+    Describes the visibility of the declaration like
+    `org.jetbrains.kotlin.descriptors.Visibility <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibility.kt>`_.
+
+    In Kotlin, explicit declarations desent from `[org.jetbrains.kotlin.fir.lightTree.fir.modifier.ModifierFlag]` (AST),
+    but implict ones (:attr:`Visibilities.UNKNOWN`) are resolved in context during frontend phase FirStatusResolver. Here,
+    this frontend stage is replaced with :meth:`Visibility.resolve()`.
+    """
+    name: str
+    is_public_api: bool
+    cross_module_boundary: CanCrossModuleBoundary
+    _resolve: Callable[[Visibility, VisibilityResolutionContext | None], Visibility] | None = None
+
+    def resolve(
+            self,
+            context: VisibilityResolutionContext | None = None,
+    ) -> Visibility:
+        if self._resolve is None:
+            return self
+        return self._resolve(self, context)
+
+    def can_cross_module_boundary(self,
+                                  as_friend_module = False,
+                                  context: VisibilityResolutionContext | None = None) -> bool:
+        resolved_ability = self.resolve(context).cross_module_boundary
+        if resolved_ability is CanCrossModuleBoundary.ALWAYS:
+            return True
+        elif as_friend_module and resolved_ability is CanCrossModuleBoundary.AS_FRIEND_MODULE:
+            return True
+        else:
+            return False
+
+# TODO: Support inheritance if support of INTERNAL, PROTECTED is added
+@dataclass(frozen=True)
+class VisibilityResolutionContext:
+    is_local: bool = False
+    containing_property_visibility: Visibility | None = None
+    overridden_visibilities: tuple[Visibility, ...] = ()
+    default_visibility: Visibility | None = None
+
+# Visibility resolution lowerings, stored here for pickling
+def resolve_unknown_visibility(
+        _self: Visibility,
+        _context: VisibilityResolutionContext | None = None,
+) -> Visibility:
+    return Visibilities.PUBLIC
+
+
+# TODO: Handle INTERNAL, PROTECTED, etc
+class Visibilities:
+    """
+    Namespace with possible AST declarations of visibility `org.jetbrains.kotlin.descriptors.Visibilities <https://github.com/JetBrains/kotlin/blob/master/core/compiler.common/src/org/jetbrains/kotlin/descriptors/Visibilities.kt>`_.
+
+    Supported:  :attr:`Visibilities.PRIVATE`, :attr:`Visibilities.PUBLIC`, :attr:`Visibilities.UNKNOWN`
+
+    Supported (adhoc): :attr:`Visibilities.PrivateToThis`, :attr:`Visibilities.Local` (by lexical scope)
+
+    Used in Kotlin: :attr:`Visibilities.Private`, :attr:`Visibilities.Public`, :attr:`Visibilities.Protected`, :attr:`Visibilities.Internal`, :attr:`Visibilities.Unknown`, :attr:`Visibilities.Local`
+
+    Supported in Kotlin (adhoc): :attr:`Visibilities.PrivateToThis`
+
+    Used in Kotlin only for diagnostics: :attr:`Visibilities.InvisibleFake`
+
+    Used in Kotlin (K1) Legacy: :attr:`Visibilities.Inherited`, :attr:`Visibilities.PrivateToThis`
+    """
+    PRIVATE = Visibility("private", False, CanCrossModuleBoundary.NEVER)
+    INTERNAL = Visibility("internal", False, CanCrossModuleBoundary.AS_FRIEND_MODULE)
+    PROTECTED = Visibility("protected", True, CanCrossModuleBoundary.ALWAYS)
+    PUBLIC = Visibility("public", True, CanCrossModuleBoundary.ALWAYS)
+
+    # TODO: Support inheritance if support of INTERNAL, PROTECTED is added
+    UNKNOWN = Visibility("unknown",
+                         False,
+                         CanCrossModuleBoundary.UNKNOWN,
+                         _resolve=resolve_unknown_visibility)
 
 class Declaration(Node):
     def get_type(self):
         raise NotImplementedError('get_type() must be implemented')
+
+    def can_cross_module_boundary(self, as_friend_module=False):
+        visibility = getattr(self, 'visibility', None)
+        return visibility is None or visibility.can_cross_module_boundary(as_friend_module=as_friend_module)
 
     def __repr__(self):
         if hasattr(self, 'name'):
@@ -165,15 +290,29 @@ class VariableDeclaration(Declaration):
     def __init__(self, name: str,
                  expr: Expr,
                  is_final: bool = True,
-                 var_type: types.Type = None,
-                 inferred_type: types.Type = None):
-        self.name = name
-        self.expr = expr
-        self.is_final = is_final
-        self.var_type = var_type
-        self.inferred_type = var_type if var_type else inferred_type
-        assert self.inferred_type, ("The inferred_type of a variable must"
-                                    " not be None")
+                 var_type: Optional[types.Type] = None,
+                 inferred_type: Optional[types.Type] = None):
+        """
+        var x: CharSequence = String() (a more specific CharSequence)
+        :param name: "x"
+        :param expr: ast.New() with "String" factory
+        :param is_final: val (True, default), var (False)
+        :param var_type: CharSequence
+        :param inferred_type: CharSequence (can be different only if var_type None)
+        """
+
+        # It's important that we don't know if it matches semantic type in Kotlin
+        # ref: work on virtual calls, inline chains. Hephaestus type system is weaker
+        # but we try to fix the consequences of it via casts when it's absolutely necessary
+        # to know static type in Kotlin that'll be semantically derived
+        inferred_type = var_type if var_type is not None else inferred_type
+        assert inferred_type is not None, ("The inferred_type of a variable"
+                                           " must not be None")
+        self.name: str = name
+        self.expr: Expr = expr
+        self.is_final: bool = is_final
+        self.var_type: Optional[types.Type] = var_type
+        self.inferred_type: types.Type = inferred_type
 
     def children(self):
         return [self.expr]
@@ -210,13 +349,14 @@ class VariableDeclaration(Declaration):
 
 
 class FieldDeclaration(Declaration):
-    def __init__(self, name: str, field_type: types.Type, is_final=True,
-                 can_override=False, override=False):
+    def __init__(self, name: str, field_type: types.Type, is_immutable=True,
+                 can_override=False, override=False, visibility=Visibilities.UNKNOWN):
         self.name = name
         self.field_type = field_type
-        self.is_final = is_final
+        self.is_immutable = is_immutable
         self.can_override = can_override
         self.override = override
+        self.visibility = visibility
 
     def children(self):
         return []
@@ -238,9 +378,10 @@ class FieldDeclaration(Declaration):
         if isinstance(other, FieldDeclaration):
             return (self.name == other.name and
                     self.field_type == other.field_type and
-                    self.is_final == other.is_final and
+                    self.is_immutable == other.is_immutable and
                     self.can_override == other.can_override and
-                    self.override == other.override)
+                    self.override == other.override and
+                    self.visibility == other.visibility)
         return False
 
 
@@ -264,10 +405,25 @@ class ObjectDecleration(Declaration):
 
 
 class SuperClassInstantiation(Node):
-    def __init__(self, class_type: types.Type, args: List[Expr] = []):
+    def __init__(self, class_type: types.Type,
+                 args: Optional[List[Expr]] = []):
+        """
+        We're interested in exact instantiation of superclass,
+        e.g. object Base("a") or SomeInterface for
+
+        class C : Base("a")
+
+        class C : SomeInterface
+
+        Note: There's a difference between args = None and args = []:
+        [] is for Base(), None is for SomeInterface
+
+        :param class_type: Base / SomeInterface
+        :param args: ["a"] / None
+        """
         assert not isinstance(class_type, types.AbstractType)
-        self.class_type = class_type
-        self.args = args
+        self.class_type: types.Type = class_type
+        self.args: Optional[List[Expr]] = args
 
     def children(self):
         return self.args or []
@@ -320,16 +476,26 @@ class CallArgument(Node):
                     self.expr.is_equal(other.is_equal))
         return False
 
+# For now, "InliningScope" (similarly to func.is_inline ) is generated for every param in every language
+class InliningScope(Enum):
+    DEFAULT = auto() # Is not a param of inline function, or a non-functional param of inline function (so adding modifiers produces compile error)
+    INLINE = auto()
+    NOINLINE = auto()
+    CROSSINLINE = auto()
 
 class ParameterDeclaration(Declaration):
     def __init__(self, name: str,
                  param_type: types.Type,
                  vararg: bool = False,
-                 default: Expr = None):
+                 default: Optional[Expr] = None,
+                 inlining_scope: InliningScope = InliningScope.DEFAULT,
+                 inherits_default_value: bool = False):
         self.name = name
         self.param_type = param_type
         self.vararg = vararg
-        self.default = default
+        self.default: Optional[Expr] = default
+        self.inlining_scope = inlining_scope
+        self.inherits_default_value = inherits_default_value
 
     def children(self):
         if self.default:
@@ -372,27 +538,31 @@ class FunctionDeclaration(Declaration):
     def __init__(self,
                  name: str,
                  params: List[ParameterDeclaration],
-                 ret_type: types.Type,
-                 body: Node,
+                 ret_type: Optional[types.Type],
+                 body: Optional[Union[Block, Expr]],
                  func_type: int,
-                 inferred_type: types.Type = None,
+                 inferred_type: Optional[types.Type] = None,
                  is_final=True,
                  is_inline=False,
                  override=False,
-                 type_parameters=[]):
-        self.name = name
-        self.params = params
-        self.ret_type = ret_type
-        self.body = body
-        self.func_type = func_type
+                 type_parameters=[],
+                 inherits_param_with_default=False,
+                 visibility=Visibilities.UNKNOWN):
+        inferred_type = ret_type if inferred_type is None else inferred_type
+        assert inferred_type is not None, ("The inferred_type of a function"
+                                           " must not be None")
+        self.name: str = name
+        self.params: List[ParameterDeclaration] = params
+        self.ret_type: Optional[types.Type] = ret_type
+        self.body: Optional[Union[Block, Expr]] = body
+        self.func_type: int = func_type
         self.is_final = is_final
         self.is_inline = is_inline
         self.override = override
         self.type_parameters = type_parameters
-        self.inferred_type = (
-            self.ret_type if inferred_type is None else inferred_type)
-        assert self.inferred_type, ("The inferred_type of a function must"
-                                    " not be None")
+        self.inferred_type: types.Type = inferred_type
+        self.inherits_param_with_default = inherits_param_with_default
+        self.visibility = visibility
 
     def children(self):
         children = self.params + self.type_parameters
@@ -459,6 +629,9 @@ class FunctionDeclaration(Declaration):
                     self.func_type == other.func_type and
                     self.is_final == other.is_final and
                     self.is_inline == other.is_inline and
+                    self.override == other.override and
+                    self.inherits_param_with_default == other.inherits_param_with_default and
+                    self.visibility == other.visibility and
                     check_list_eq(self.params, other.params) and
                     check_list_eq(self.type_parameters,
                                   other.type_parameters) and
@@ -620,18 +793,25 @@ class ClassDeclaration(Declaration):
                 return f
         return None
 
+    # Protected must be supported somewhere here
     def get_overridable_functions(self):
+        if self.is_final:
+            return []
         return [
             f
             for f in self.functions
-            if not f.is_final
+            if not (f.is_final or f.visibility.resolve() == Visibilities.PRIVATE)
         ]
 
     def get_overridable_fields(self):
+        if self.is_final:
+            return []
+
         return [
             f
             for f in self.fields
-            if f.can_override and f.is_final
+            # Kotlin specific; mutable ones can also be overwritten
+            if f.can_override and not f.visibility.resolve() == Visibilities.PRIVATE
         ]
 
     def get_callable_functions(self, class_decls) -> Set[FunctionDeclaration]:
@@ -639,6 +819,8 @@ class ClassDeclaration(Declaration):
         """
         # Get functions that are implemented in the current class
         functions = set(self.functions)
+        # Track which function names are overridden in this class
+        overridden_names = {f.name for f in self.functions}
 
         if not self.superclasses:
             return functions
@@ -656,6 +838,9 @@ class ClassDeclaration(Declaration):
 
         # substitute type variables in parent's functions
         for f in parent_funcs:
+            # Skip parent functions that are overridden in this class
+            if f.name in overridden_names:
+                continue
             new_f = deepcopy(f)
             params = []
             for p in f.params:
@@ -823,6 +1008,7 @@ class ClassDeclaration(Declaration):
                     check_list_eq(self.superclasses, other.superclasses) and
                     self.class_type == other.class_type and
                     check_list_eq(self.functions, other.functions) and
+                    check_list_eq(self.fields, other.fields) and
                     self.is_final == other.is_final and
                     check_list_eq(self.type_parameters, other.type_parameters)
                     and self.supertypes == other.supertypes)
@@ -1038,7 +1224,7 @@ class BinaryOp(Expr):
             # @theosotr should we keep this check? If we ant to keep it we may
             # want to check if the operator is valid for a given language
             assert operator in self.ALL_OPERATORS, (
-                'Binary operator ' + operator + ' is not valid')
+                    'Binary operator ' + operator + ' is not valid')
         self.lexpr = lexpr
         self.rexpr = rexpr
         self.operator = operator
@@ -1258,12 +1444,12 @@ class FieldAccess(Expr):
 
 class FunctionCall(Expr):
     def __init__(self, func: str, args: List[CallArgument],
-                 receiver: Expr = None,
+                 receiver: Optional[Expr] = None,
                  type_args: List[types.Type] = [],
                  is_ref_call: bool = False):
         self.func = func
         self.args = args
-        self.receiver = receiver
+        self.receiver: Optional[Expr] = receiver
         self.type_args = type_args
         self.is_ref_call = is_ref_call
         self._can_infer_type_args = False
@@ -1327,10 +1513,12 @@ class FunctionCall(Expr):
 
 
 class FunctionReference(Expr):
-    def __init__(self, func: str, receiver: Expr, signature: types.Type):
+    def __init__(self, func: str, receiver: Optional[Expr], signature: types.Type,
+                 target_decl=None):
         self.func = func
         self.receiver = receiver
         self.signature = signature
+        self.target_decl = target_decl
 
     def children(self):
         if not self.receiver:
@@ -1356,7 +1544,8 @@ class FunctionReference(Expr):
 
 
 class Assignment(Expr):
-    def __init__(self, name: str, expr: Expr, receiver: Expr = None):
+    def __init__(self, name: str, expr: Expr,
+                 receiver: Optional[Expr] = None):
         self.name = name
         self.expr = expr
         self.receiver = receiver

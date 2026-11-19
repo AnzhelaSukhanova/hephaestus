@@ -1,17 +1,214 @@
-from collections import OrderedDict
+from __future__ import annotations
+
+from collections import OrderedDict, defaultdict
+from contextlib import contextmanager
+from typing import (DefaultDict, Dict, Iterable, List, Literal, Mapping, Optional,
+                    Set, Tuple, Type, TypeAlias, TypedDict, Union)
 
 from src import utils
-from src.ir import ast
+from src.ir import ast, types
+from src.ir.generation_context import CallContext
+from src.ir.data_structures import StackWithCounter
+
+# ('global', 'Foo')
+NamespacePath: TypeAlias = Tuple[str, ...]
+
+# Types can register in namespaces via _add_entity() (add_func, add_class, add_var, add_type)
+NamespaceEntity: TypeAlias = Union[ast.Declaration, ast.Lambda, types.TypeParameter]
+
+class Namespace(TypedDict):
+    types: Dict[str, types.TypeParameter]
+    funcs: Dict[str, ast.FunctionDeclaration]
+    lambdas: Dict[str, ast.Lambda]
+    vars: Dict[str, Union[ast.VariableDeclaration, ast.FieldDeclaration,
+                          ast.ParameterDeclaration]]
+    classes: Dict[str, ast.ClassDeclaration]
+    decls: Dict[str, ast.Declaration]
+
+
+EntityBucket: TypeAlias = Literal['types', 'funcs', 'lambdas', 'vars', 'classes', 'decls']
 
 
 class Context():
 
     def __init__(self):
-        self._context = {}
-        # A lookup from declarations to namespaces
-        self._namespaces = {}
+        # CROSSMODULE SUPPORT
+        self._target_module: Optional[str] = None  # klib for which this Context() is produced
 
-    def _add_entity(self, namespace, entity, name, value):
+        # _context and _namespaces are tied together
+        # _context[namespace] : declarations in scope
+        # _namespaces[decl] : scope with a given declaration
+        self._context: Dict[NamespacePath, Namespace] = {}
+        # A lookup from declarations to namespaces
+        self._namespaces: Dict[NamespaceEntity, NamespacePath] = {}
+
+        # LOCAL TO AST SUBTREE
+        # Cleared when we temporarily go to other AST subtree (to general global helper function for example). This is the main one
+        self._subtree_call_stack: StackWithCounter[CallContext] = \
+            StackWithCounter()
+        # Optimization on top of self._subtree_call_stack to get O(1) access to last call of each subtype
+        # T <: CallContext, i.e. T = FunctionCallParamGeneration, ExprCallSite, etc
+        # DefaultDict[T, List[T]]
+        # TODO: preserve frame subtypes with `typed_stack_for[T: CallContext](frame_type: type[T]) -> list[T]`
+        self._typed_subtree_call_stacks: DefaultDict[
+            Type[CallContext], List[CallContext]] = defaultdict(list)
+
+        # PERSISTENT
+        # Persists during AST subtree jumps (inside of global function generation)
+        self._persistent_call_stack: StackWithCounter[CallContext] = \
+            StackWithCounter()
+        # Optimization on top of self._persistent_call_stack to get O(1) access to last call of each type
+        # DefaultDict[T, List[T]] for T <: CallContext
+        self._typed_persistent_call_stacks: DefaultDict[
+            Type[CallContext], List[CallContext]] = defaultdict(list)
+
+    @property
+    def target_module(self) -> Optional[str]:
+        return getattr(self, '_target_module', None)
+
+    @target_module.setter
+    def target_module(self, module: Optional[str]) -> None:
+        self._target_module = module
+
+    def name_is_local(self, name: str) -> bool:
+        """Is ``name`` from this context's module"""
+        if not self.target_module:
+            return True
+        name = str(name)
+        if '.' not in name:
+            return True
+        module, _ = utils.split_qualified_name(name)
+        return module == self.target_module
+
+    # HELPERS TO WORK WITH ANY STACKED CONTEXT
+    def _push_call_context(self, callcontext: CallContext,
+                           call_stack: StackWithCounter[CallContext],
+                           typed_call_stacks: DefaultDict[
+                               Type[CallContext], List[CallContext]]) -> None:
+        call_stack.append(callcontext)
+        typed_call_stacks[type(callcontext)].append(callcontext)
+
+    def _pop_call_context(
+            self, call_stack: StackWithCounter[CallContext],
+            typed_call_stacks: DefaultDict[Type[CallContext],
+                                           List[CallContext]]
+    ) -> Optional[CallContext]:
+        if not call_stack:
+            return None
+        last_call_context = call_stack.pop()
+        assert typed_call_stacks[type(last_call_context)].pop() is last_call_context
+        return last_call_context
+
+    def _has_call_context(self, frame_type: Type[CallContext],
+                          typed_call_stacks: DefaultDict[
+                              Type[CallContext], List[CallContext]]) -> bool:
+        return bool(typed_call_stacks.get(frame_type, []))
+
+    def _current_call_context(
+            self, call_stack: StackWithCounter[CallContext],
+            typed_call_stacks: DefaultDict[Type[CallContext],
+                                           List[CallContext]],
+            frame_type: Optional[Type[CallContext]] = None
+    ) -> Optional[CallContext]:
+        if frame_type is None:
+            if not call_stack:
+                return None
+            return call_stack[-1]
+
+        if self._has_call_context(frame_type, typed_call_stacks):
+            return typed_call_stacks[frame_type][-1]
+        else:
+            return None
+
+    # AST SUBTREE CALL STACK
+    def push_call_context(self, callcontext: CallContext) -> None:
+        self._push_call_context(callcontext, self._subtree_call_stack, self._typed_subtree_call_stacks)
+
+    def pop_call_context(self) -> Optional[CallContext]:
+        return self._pop_call_context(self._subtree_call_stack, self._typed_subtree_call_stacks)
+
+    def has_call_context(self, frame_type: Type[CallContext]) -> bool:
+        return self._has_call_context(frame_type, self._typed_subtree_call_stacks)
+
+    def current_call_context(
+            self, frame_type: Optional[Type[CallContext]] = None
+    ) -> Optional[CallContext]:
+        return self._current_call_context(
+            self._subtree_call_stack, self._typed_subtree_call_stacks,
+            frame_type)
+
+    # SUBTREE STACK SUFFIX, TAIL
+    def call_context_stack_suffix_types(self, *frame_types) -> bool:
+        stack = self._subtree_call_stack
+        n = len(frame_types)
+
+        if len(stack) < n:
+            return False
+
+        suffix = stack[-n:]
+        return all(isinstance(frame, expected)
+                   for frame, expected in zip(suffix, frame_types))
+
+    def call_context_tail(self, limit: int = 4) -> tuple[CallContext, ...]:
+        return tuple(self._subtree_call_stack[-limit:])
+
+    # PERSISTENT CALL STACK
+    def push_persistent_call_context(self, callcontext: CallContext) -> None:
+        self._push_call_context(callcontext, self._persistent_call_stack, self._typed_persistent_call_stacks)
+
+    def pop_persistent_call_context(self) -> Optional[CallContext]:
+        return self._pop_call_context(self._persistent_call_stack, self._typed_persistent_call_stacks)
+
+    def has_persistent_call_context(self, frame_type: Type[CallContext]) -> bool:
+        return self._has_call_context(frame_type, self._typed_persistent_call_stacks)
+
+    def current_persistent_call_context(
+            self, frame_type: Optional[Type[CallContext]] = None
+    ) -> Optional[CallContext]:
+        return self._current_call_context(
+            self._persistent_call_stack, self._typed_persistent_call_stacks,
+            frame_type)
+
+    # GLOBAL CONTEXT MANAGEMENT
+    # Subtree isolation
+    @contextmanager
+    def isolate_call_stacks(self):
+        initial_call_stack = self._subtree_call_stack
+        initial_typed_call_stacks = self._typed_subtree_call_stacks
+
+        self._subtree_call_stack = StackWithCounter()
+        self._typed_subtree_call_stacks = defaultdict(list)
+        try:
+            yield
+            assert not self._subtree_call_stack, "Must pop everything out"
+        finally:
+            self._subtree_call_stack = initial_call_stack
+            self._typed_subtree_call_stacks = initial_typed_call_stacks
+
+    @contextmanager
+    def call_contexts(
+            self, subtree_pushed_call_context: Iterable[Optional[CallContext]] = (),
+            persistent_pushed_call_context: Iterable[Optional[CallContext]] = ()
+    ):
+        subtree_pushed_call_context = [frame for frame in subtree_pushed_call_context if frame is not None]
+        persistent_pushed_call_context = [frame for frame in persistent_pushed_call_context if frame is not None]
+
+        for frame in subtree_pushed_call_context:
+            self.push_call_context(frame)
+        for frame in persistent_pushed_call_context:
+            self.push_persistent_call_context(frame)
+
+        try:
+                yield
+        finally:
+            for expected in reversed(persistent_pushed_call_context):
+                assert self.pop_persistent_call_context() is expected
+            for expected in reversed(subtree_pushed_call_context):
+                assert self.pop_call_context() is expected
+
+
+    def _add_entity(self, namespace: NamespacePath, entity: EntityBucket,
+                    name: str, value: NamespaceEntity) -> None:
         if namespace in self._context:
             self._context[namespace][entity][name] = value
         else:
@@ -26,7 +223,62 @@ class Context():
             self._context[namespace][entity][name] = value
         self._namespaces[value] = namespace
 
-    def _remove_entity(self, namespace, entity, name):
+    def _add_declaration_entity(self, namespace: NamespacePath,
+                                entity: EntityBucket, name: str,
+                                value: ast.Declaration) -> None:
+        self._add_entity(namespace, entity, name, value)
+        self._add_entity(namespace, 'decls', name, value)
+
+    def update_declarations(self, decls: Dict[str, ast.Declaration]) -> None:
+        self._context[ast.GLOBAL_NAMESPACE]['decls'] = decls
+
+    def _add_function(self, namespace: NamespacePath,
+                      func: ast.FunctionDeclaration) -> None:
+        self.add_func(namespace, func.name, func)
+        namespace = namespace + (func.name,)
+        for param in func.params:
+            self.add_var(namespace, param.name, param)
+        if not func.body or not isinstance(func.body, ast.Block):
+            return
+        stack = list(func.body.body)
+        while stack:
+            statement = stack.pop()
+            if isinstance(statement, ast.VariableDeclaration):
+                self.add_var(namespace, statement.name, statement)
+
+            if isinstance(statement, ast.FunctionDeclaration):
+                self._add_function(namespace, statement)
+
+            if isinstance(statement, ast.Conditional):
+                stack.append(statement.true_branch)
+                stack.append(statement.false_branch)
+
+            if isinstance(statement, ast.Block):
+                stack.extend(statement.body)
+
+    def _add_class(self, namespace: NamespacePath,
+                   class_decl: ast.ClassDeclaration) -> None:
+        namespace = namespace + (class_decl.name,)
+        for field in class_decl.fields:
+            self.add_var(namespace, field.name, field)
+        for function in class_decl.functions:
+            self._add_function(namespace, function)
+
+    def add_declaration(self, decl: ast.Declaration) -> None:
+        decl_types = {
+            ast.FunctionDeclaration: self.add_func,
+            ast.ClassDeclaration: self.add_class,
+            ast.VariableDeclaration: self.add_var,
+        }
+        decl_types[decl.__class__](ast.GLOBAL_NAMESPACE, decl.name, decl)
+        if isinstance(decl, ast.ClassDeclaration):
+            self._add_class(ast.GLOBAL_NAMESPACE, decl)
+
+        if isinstance(decl, ast.FunctionDeclaration):
+            self._add_function(ast.GLOBAL_NAMESPACE, decl)
+
+    def _remove_entity(self, namespace: NamespacePath, entity: EntityBucket,
+                       name: str) -> None:
         if namespace not in self._context:
             return
         if name in self._context[namespace][entity]:
@@ -35,39 +287,71 @@ class Context():
                 del self._namespaces[decl]
             del self._context[namespace][entity][name]
 
-    def add_type(self, namespace, type_name, t):
+    def remove_declaration(
+            self, decl: Union[ast.FunctionDeclaration, ast.ClassDeclaration,
+                              ast.VariableDeclaration]
+    ) -> None:
+        decl_types = {
+            ast.FunctionDeclaration: self.remove_func,
+            ast.ClassDeclaration: self.remove_class,
+            ast.VariableDeclaration: self.remove_var,
+        }
+        decl_types[decl.__class__](ast.GLOBAL_NAMESPACE, decl.name)
+
+    def prepare_this_context_for_import(self) -> None:
+        """Prepare this completed context for use as an imported dependency"""
+        self._drop_unreachable_global_declarations_from_lookup()
+
+    def _drop_unreachable_global_declarations_from_lookup(self) -> None:
+        """Remove entry points to global declarations that fail to
+         cross cross-module boundary. Their namespaces still survive
+         but lack entry points for access
+        """
+        global_entities = self._context[ast.GLOBAL_NAMESPACE]
+
+        unreachable = [
+            decl for decl in global_entities["decls"].values()
+            if not decl.can_cross_module_boundary()
+        ]
+        for decl in unreachable:
+            self.remove_declaration(decl)
+
+    def add_type(self, namespace: NamespacePath, type_name: str,
+                 t: types.TypeParameter) -> None:
         self._add_entity(namespace, 'types', type_name, t)
 
-    def add_func(self, namespace, func_name, func):
-        self._add_entity(namespace, 'funcs', func_name, func)
-        self._add_entity(namespace, 'decls', func_name, func)
+    def add_func(self, namespace: NamespacePath, func_name: str,
+                 func: ast.FunctionDeclaration) -> None:
+        self._add_declaration_entity(namespace, 'funcs', func_name, func)
 
-    def add_lambda(self, namespace, shadow_name, lmd):
+    def add_lambda(self, namespace: NamespacePath, shadow_name: str,
+                   lmd: ast.Lambda) -> None:
         self._add_entity(namespace, 'lambdas', shadow_name, lmd)
 
-    def add_var(self, namespace, var_name, var):
-        self._add_entity(namespace, 'vars', var_name, var)
-        self._add_entity(namespace, 'decls', var_name, var)
+    def add_var(self, namespace: NamespacePath, var_name: str,
+                var: Union[ast.VariableDeclaration, ast.FieldDeclaration,
+                           ast.ParameterDeclaration]) -> None:
+        self._add_declaration_entity(namespace, 'vars', var_name, var)
 
-    def add_class(self, namespace, class_name, cls):
-        self._add_entity(namespace, 'classes', class_name, cls)
-        self._add_entity(namespace, 'decls', class_name, cls)
+    def add_class(self, namespace: NamespacePath, class_name: str,
+                  cls: ast.ClassDeclaration) -> None:
+        self._add_declaration_entity(namespace, 'classes', class_name, cls)
 
-    def remove_type(self, namespace, type_name):
+    def remove_type(self, namespace: NamespacePath, type_name: str) -> None:
         self._remove_entity(namespace, 'types', type_name)
 
-    def remove_var(self, namespace, var_name):
+    def remove_var(self, namespace: NamespacePath, var_name: str) -> None:
         self._remove_entity(namespace, 'vars', var_name)
         self._remove_entity(namespace, 'decls', var_name)
 
-    def remove_func(self, namespace, func_name):
+    def remove_func(self, namespace: NamespacePath, func_name: str) -> None:
         self._remove_entity(namespace, 'funcs', func_name)
         self._remove_entity(namespace, 'decls', func_name)
 
-    def remove_lambda(self, namespace, shadow_name):
+    def remove_lambda(self, namespace: NamespacePath, shadow_name: str) -> None:
         self._remove_entity(namespace, 'lambdas', shadow_name)
 
-    def remove_class(self, namespace, class_name):
+    def remove_class(self, namespace: NamespacePath, class_name: str) -> None:
         self._remove_entity(namespace, 'classes', class_name)
         self._remove_entity(namespace, 'decls', class_name)
 
@@ -103,14 +387,18 @@ class Context():
             decls = {k: v for k, v in decls.items() if v is not None}
         return decls
 
-    def find_namespaces(self, namespace, none):
+    def find_namespaces(self, namespace: NamespacePath,
+                        none: bool) -> List[NamespacePath]:
         func_namespaces = [namespace + (fname,)
                            for fname in self.get_funcs(namespace, True, none=none)]
         class_namespaces = [namespace + (cname,)
                             for cname in self.get_classes(namespace, True, none=none)]
         return func_namespaces + class_namespaces
 
-    def get_namespaces_decls(self, namespace, name, decl_type, glob=True):
+    def get_namespaces_decls(
+            self, namespace: NamespacePath, name: str,
+            decl_type: EntityBucket, glob: bool = True
+    ) -> Set[Tuple[NamespacePath, NamespaceEntity]]:
         """Return a set of tuples of namespace, decl. Note that namespace
         includes the name of the decl.
         """
@@ -130,37 +418,61 @@ class Context():
             namespaces.extend(self.find_namespaces(namespace, none=False))
         return namespaces_decls
 
-    def get_decl(self, namespace, name):
+    def get_decl(self, namespace: NamespacePath,
+                 name: str) -> Optional[ast.Declaration]:
         return self._context.get(namespace, {}).get('decls', {}).get(
             name, None)
 
-    def get_lambda(self, namespace, name):
+    def get_lambda(self, namespace: NamespacePath,
+                   name: str) -> Optional[ast.Lambda]:
         return self._context.get(namespace, {}).get('lambdas', {}).get(
             name, None)
 
-    def get_types(self, namespace, only_current=False, glob=False, none=False):
+    def get_types(
+            self, namespace: NamespacePath, only_current: bool = False,
+            glob: bool = False, none: bool = False
+    ) -> Mapping[str, types.TypeParameter]:
         return self._get_declarations(namespace, 'types', only_current, glob, none)
 
-    def get_funcs(self, namespace, only_current=False, glob=False, none=False):
+    def get_funcs(
+            self, namespace: NamespacePath, only_current: bool = False,
+            glob: bool = False, none: bool = False
+    ) -> Mapping[str, ast.FunctionDeclaration]:
         return self._get_declarations(namespace, 'funcs', only_current, glob, none)
 
-    def get_lambdas(self, namespace, only_current=False, glob=False, none=False):
+    def get_lambdas(
+            self, namespace: NamespacePath, only_current: bool = False,
+            glob: bool = False, none: bool = False
+    ) -> Mapping[str, ast.Lambda]:
         return self._get_declarations(namespace, 'lambdas', only_current, glob, none)
 
-    def get_vars(self, namespace, only_current=False, glob=False, none=False):
+    def get_vars(
+            self, namespace: NamespacePath, only_current: bool = False,
+            glob: bool = False, none: bool = False
+    ) -> Mapping[str, Union[ast.VariableDeclaration, ast.FieldDeclaration,
+                             ast.ParameterDeclaration]]:
         return self._get_declarations(namespace, 'vars', only_current, glob, none)
 
-    def get_classes(self, namespace, only_current=False, glob=False, none=False):
+    def get_classes(
+            self, namespace: NamespacePath, only_current: bool = False,
+            glob: bool = False, none: bool = False
+    ) -> Mapping[str, ast.ClassDeclaration]:
         return self._get_declarations(namespace, 'classes', only_current, glob, none)
 
-    def get_declarations(self, namespace, only_current=False, glob=False, none=False):
+    def get_declarations(
+            self, namespace: NamespacePath, only_current: bool = False,
+            glob: bool = False, none: bool = False
+    ) -> Mapping[str, ast.Declaration]:
         return self._get_declarations(namespace, 'decls', only_current, glob, none)
 
-    def remove_namespace(self, namespace):
+    def remove_namespace(self, namespace: NamespacePath) -> None:
         if namespace in self._context:
             self._context.pop(namespace)
 
-    def get_declarations_in(self, namespace):
+    def get_declarations_in(
+            self, namespace: NamespacePath
+    ) -> Mapping[NamespacePath, Mapping[str, ast.Declaration]]:
+        """Return Namespace['decls'] bucket for every namespace <= than given ``namespace``"""
         decls = {}
         for ns, entities in self._context.items():
             if utils.prefix_lst(namespace, ns):
@@ -170,16 +482,18 @@ class Context():
     def get_decl_type(self, namespace, name):
         return type(self.get_decl(namespace, name))
 
-    def get_namespace(self, decl):
+    def get_namespace(self, decl: NamespaceEntity) -> Optional[NamespacePath]:
         return self._namespaces.get(decl, None)
 
-    def get_parent(self, namespace):
+    def get_parent(self, namespace: NamespacePath) -> Optional[ast.Declaration]:
         if len(namespace) < 2:
             return None
         parent_namespace = namespace[:-1]
         return self.get_decl(parent_namespace[:-1], parent_namespace[-1])
 
-    def get_parent_class(self, namespace):
+    def get_parent_class(
+            self, namespace: NamespacePath
+    ) -> Optional[ast.ClassDeclaration]:
         parent = self.get_parent(namespace)
         if parent is None and not (len(namespace) > 2 and
                                    'lambda_' in namespace[-2]):
@@ -189,7 +503,10 @@ class Context():
         return self.get_parent_class(namespace[:-1])
 
 
-def get_decl(context, namespace, decl_name: str, limit=None):
+def get_decl(
+        context: Context, namespace: NamespacePath, decl_name: str,
+        limit: Optional[NamespacePath] = None
+) -> Optional[Tuple[NamespacePath, ast.Declaration]]:
     """
     We search the context for a declaration with the given name (`decl_name`).
 
@@ -204,8 +521,7 @@ def get_decl(context, namespace, decl_name: str, limit=None):
                 else utils.prefix_lst(limit, ns))
 
     while stop_cond(namespace):
-        decls = context.get_declarations(namespace, True)
-        decl = decls.get(decl_name)
+        decl = context.get_decl(namespace, decl_name)
         if decl:
             return namespace, decl
         namespace = namespace[:-1]

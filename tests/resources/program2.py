@@ -11,7 +11,7 @@ from src.ir.context import *
 xB_field = FieldDeclaration(
     "x",
     StringType(),
-    is_final=True,
+    is_immutable=True,
     override=False
 )
 

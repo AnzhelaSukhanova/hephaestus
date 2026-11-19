@@ -1,20 +1,48 @@
 # pylint: disable=protected-access,dangerous-default-value
-import time
-import threading
 import sys
+import threading
+import time
+from collections.abc import Callable, Mapping
+from functools import wraps
+from typing import Protocol
 
+from src.ir import ast, types as tp
+from src.ir.context import NamespacePath
+from src.ir.node import Node
 from src.ir.visitors import DefaultVisitorUpdate
+from src.modules.logging import Logger
+
+# Only for static checkers purposes.
+class NamespaceAware(Protocol):
+    _namespace: NamespacePath
+
+# Only for static checkers purposes.
+class DepthAware(Protocol):
+    depth: int
 
 
-def timeout_function(log, entity, timeouted):
+# Callback invoked by threading.Timer.
+def timeout_function(log: Callable[[str], None], entity: str,
+                     timeouted: list[bool]) -> None:
     log("{}: took too long (timeout)".format(entity))
     sys.stderr.flush() # Python 3 stderr is likely buffered.
     timeouted[0] = True
 
 
-def visitor_logging_and_timeout_with_args(*args):
-    def wrap_visitor_func(visitor_func):
-        def wrapped_visitor(self, node):
+# Accepts a visitor method ``(TransformationT, NodeT) ->
+# NodeT`` and returns a logging/timeout wrapper with the same shape.
+def visitor_logging_and_timeout_with_args[
+        TransformationT: Transformation, NodeT: Node](
+        *args: str
+) -> Callable[
+    [Callable[[TransformationT, NodeT], NodeT]],
+    Callable[[TransformationT, NodeT], NodeT]
+]:
+    def wrap_visitor_func(
+            visitor_func: Callable[[TransformationT, NodeT], NodeT]
+    ) -> Callable[[TransformationT, NodeT], NodeT]:
+        @wraps(visitor_func)
+        def wrapped_visitor(self: TransformationT, node: NodeT) -> NodeT:
             if len(args) > 0:
                 self.log(*args)
             transformation_name = self.__class__.__name__
@@ -42,61 +70,75 @@ def visitor_logging_and_timeout_with_args(*args):
     return wrap_visitor_func
 
 
-def change_namespace(visit):
-    def inner(self, node):
+def change_namespace[
+        NamespaceVisitorT: NamespaceAware,
+        NamespaceNodeT: (ast.ClassDeclaration, ast.FunctionDeclaration, ast.Lambda),
+        VisitorResult](
+        visit: Callable[[NamespaceVisitorT, NamespaceNodeT], VisitorResult]
+) -> Callable[[NamespaceVisitorT, NamespaceNodeT], VisitorResult]:
+    @wraps(visit)
+    def inner(self: NamespaceVisitorT,
+              node: NamespaceNodeT) -> VisitorResult:
         initial_namespace = self._namespace
         self._namespace += (node.name,)
         new_node = visit(self, node)
         self._namespace = initial_namespace
         return new_node
+
     return inner
 
 
-def change_depth(visit):
-    def inner(self, node):
+def change_depth[DepthVisitorT: DepthAware, NodeT: Node](
+        visit: Callable[[DepthVisitorT, NodeT], NodeT]
+) -> Callable[[DepthVisitorT, NodeT], NodeT]:
+    @wraps(visit)
+    def inner(self: DepthVisitorT, node: NodeT) -> NodeT:
         initial_depth = self.depth
         self.depth += 1
         new_node = visit(self, node)
         self.depth = initial_depth
         return new_node
+
     return inner
 
 
 class Transformation(DefaultVisitorUpdate):
     CORRECTNESS_PRESERVING = None
 
-    def __init__(self, program, language, logger=None, options={}):
+    def __init__(self, program: ast.Program, language: str,
+                 logger: Logger | None = None,
+                 options: Mapping[str, int] = {}):
         assert program is not None, 'The given program must not be None'
-        self.is_transformed = False
-        self.language = language
-        self.program = program
-        self.types = self.program.get_types()
-        self.logger = logger
-        self.options = options
-        self.timeout = options.get("timeout", 600)
+        self.is_transformed: bool = False
+        self.language: str = language
+        self.program: ast.Program = program
+        self.types: list[tp.Type] = self.program.get_types()
+        self.logger: Logger | None = logger
+        self.options: Mapping[str, int] = options
+        self.timeout: int = options.get("timeout", 600)
         if self.logger:
             self.logger.log_info()
 
-    def transform(self):
+    def transform(self) -> None:
         self.program = self.visit(self.program)
 
-    def result(self):
+    def result(self) -> ast.Program:
         return self.program
 
-    def log(self, msg):
+    def log(self, msg: str) -> None:
         if self.logger is None:
             pass
         else:
             self.logger.log(msg)
 
     @classmethod
-    def get_name(cls):
+    def get_name(cls) -> str:
         return cls.__name__
 
     @classmethod
-    def preserve_correctness(cls):
+    def preserve_correctness(cls) -> bool | None:
         return cls.CORRECTNESS_PRESERVING
 
     @visitor_logging_and_timeout_with_args()
-    def visit_program(self, node):
+    def visit_program(self, node: ast.Program) -> ast.Program:
         return super().visit_program(node)

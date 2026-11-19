@@ -2,11 +2,15 @@
 This file includes utility functions for the generator module.
 """
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from src import utils as ut
+from src.generators.config import cfg
 from src.ir import ast
 from src.ir import types as tp
 from src.ir import type_utils as tu
+
+AttributeDeclaration: TypeAlias = ast.FieldDeclaration | ast.FunctionDeclaration
 
 
 ### Data Classes ###
@@ -36,9 +40,9 @@ class AttrAccessInfo:
         attr_inst: TypeVarMap for attr_decl if attr_decl is a parameterized
             function
     """
-    receiver_t: tp.Type
+    receiver_t: tp.Type | None
     receiver_inst: tu.TypeVarMap
-    attr_decl: ast.Declaration
+    attr_decl: AttributeDeclaration
     attr_inst: tu.TypeVarMap
 
 
@@ -58,15 +62,15 @@ class AttrReceiverInfo:
             function.
     """
     receiver_expr: ast.Expr
-    receiver_inst: tu.TypeVarMap
-    attr_decl: ast.Declaration
-    attr_inst: tu.TypeVarMap
+    receiver_inst: tu.TypeVarMap | None
+    attr_decl: AttributeDeclaration
+    attr_inst: tu.TypeVarMap | None
 
 
 ### Utility functions ###
 
 # NOTE maybe me can create an enum for class types
-def select_class_type(contain_fields: bool):
+def select_class_type(contain_fields: bool) -> int:
     """Select class type for a class declaration.
 
     Args:
@@ -77,13 +81,22 @@ def select_class_type(contain_fields: bool):
     """
     # TODO probabilities table
     # there's higher probability to generate a regular class.
-    if ut.random.bool():
+    if ut.random.bool(cfg.prob.class_type.regular):
         return ast.ClassDeclaration.REGULAR
 
-    candidates = [ast.ClassDeclaration.ABSTRACT]
-    if not contain_fields:
-        candidates.append(ast.ClassDeclaration.INTERFACE)
-    return ut.random.choice(candidates)
+    if contain_fields:
+        return ast.ClassDeclaration.ABSTRACT
+
+    return ut.random.r.choices(
+        population=[
+            ast.ClassDeclaration.ABSTRACT,
+            ast.ClassDeclaration.INTERFACE,
+        ],
+        weights=[
+            cfg.prob.class_type.abstract,
+            cfg.prob.class_type.interface,
+        ]
+    )[0]
 
 
 def init_variance_choices(type_var_map: tu.TypeVarMap) -> tu.VarianceChoices:
@@ -100,7 +113,7 @@ def init_variance_choices(type_var_map: tu.TypeVarMap) -> tu.VarianceChoices:
     return variance_choices
 
 
-def gen_identifier(ident_type:str=None) -> str:
+def gen_identifier(ident_type: str | None = None) -> str:
     """Generate an identifier name.
 
     Args:

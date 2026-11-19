@@ -3,7 +3,7 @@ from src.ir.context import *
 
 
 def produce_program(lang, types):
-    a_a_field = FieldDeclaration("a", types.StringType(), is_final=True)
+    a_a_field = FieldDeclaration("a", types.StringType(), is_immutable=True)
 
     param_i = ParameterDeclaration("i", types.String)
     a_foo_clos_s = VariableDeclaration(

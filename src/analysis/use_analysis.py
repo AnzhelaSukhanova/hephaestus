@@ -1,34 +1,37 @@
 # pylint: disable=pointless-statement
-from typing import Tuple, NamedTuple
+from typing import DefaultDict, Mapping, NamedTuple, Optional, Set, TypeAlias
 from collections import defaultdict
 
 from src.ir import ast
-from src.ir.context import get_decl
+from src.ir.context import NamespacePath, get_decl
 from src.ir.visitors import DefaultVisitor
 from src.transformations.base import change_namespace
 
 
 class GNode(NamedTuple):
-    namespace: Tuple[str, ...]
-    name: str
+    namespace: Optional[NamespacePath]
+    name: Optional[str]
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.name is None:
             return "NONE"
+        assert self.namespace is not None
         return "/".join(self.namespace + (self.name,))
 
-    def is_none(self):
+    def is_none(self) -> bool:
         return self.name is None
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
 
 NONE_NODE = GNode(None, None)
 FUNC_RET = '__RET__'
+UseGraph: TypeAlias = Mapping[GNode, Set[GNode]]
+MutableUseGraph: TypeAlias = DefaultDict[GNode, Set[GNode]]
 
 
-class UseAnalysis(DefaultVisitor):
+class UseAnalysis(DefaultVisitor[None, UseGraph]):
     """Get the use graph for a node.
 
     To employ UseAnalysis use the following instructions.
@@ -37,23 +40,24 @@ class UseAnalysis(DefaultVisitor):
     analysis.visit(node)
     use_graph = analysis.result()
     """
-    def __init__(self, program):
+    def __init__(self, program: ast.Program):
         # The type of each node is: GNode
-        self._use_graph = defaultdict(set)  # node => [node]
+        self._use_graph: MutableUseGraph = defaultdict(set)  # node => [node]
         self._use_graph[NONE_NODE]
-        self._namespace = ast.GLOBAL_NAMESPACE
+        self._namespace: NamespacePath = ast.GLOBAL_NAMESPACE
         self.program = program
-        self.add_none_to_call = True
-        self._ret_vars = set()
-        self._selected_namespace = None
+        self.add_none_to_call: bool = True
+        self._ret_vars: Set[str] = set()
+        self._selected_namespace: Optional[NamespacePath] = None
 
-    def set_namespace(self, namespace):
+    def set_namespace(self, namespace: NamespacePath) -> None:
         self._namespace = namespace
 
-    def result(self):
+    def result(self) -> UseGraph:
         return self._use_graph
 
-    def _flow_ret_to_callee(self, expr: ast.FunctionCall, target_node: GNode):
+    def _flow_ret_to_callee(self, expr: ast.FunctionCall,
+                            target_node: GNode) -> None:
         fun_nsdecl = get_decl(
             self.program.context, self._namespace, expr.func,
             limit=self._selected_namespace)
@@ -66,7 +70,8 @@ class UseAnalysis(DefaultVisitor):
             self._use_graph[target_node]
             self._use_graph[callee_node].add(target_node)
 
-    def _flow_var_to_ref(self, expr: ast.Variable, target_node: GNode):
+    def _flow_var_to_ref(self, expr: ast.Variable,
+                         target_node: GNode) -> None:
         var_node = get_decl(self.program.context,
                             self._namespace, expr.name,
                             limit=self._selected_namespace)

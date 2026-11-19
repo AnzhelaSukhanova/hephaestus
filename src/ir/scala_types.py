@@ -1,71 +1,73 @@
 # pylint: disable=abstract-method, useless-super-delegation,too-many-ancestors
+from typing import List
+
 import src.ir.types as tp
 
 import src.ir.builtins as bt
 
 
 class ScalaBuiltinFactory(bt.BuiltinFactory):
-    def get_language(self):
+    def get_language(self) -> str:
         return "scala"
 
     def get_builtin(self):
         return ScalaBuiltin
 
-    def get_void_type(self):
+    def get_void_type(self) -> tp.Type:
         return UnitType()
 
-    def get_any_type(self):
+    def get_any_type(self) -> tp.Type:
         return AnyType()
 
-    def get_anyref_type(self):
+    def get_anyref_type(self) -> tp.Type:
         return AnyRefType()
 
-    def get_number_type(self):
+    def get_number_type(self) -> tp.Type:
         return NumberType()
 
-    def get_integer_type(self, primitive=False):
+    def get_integer_type(self, primitive: bool = False) -> tp.Type:
         return IntegerType()
 
-    def get_byte_type(self, primitive=False):
+    def get_byte_type(self, primitive: bool = False) -> tp.Type:
         return ByteType()
 
-    def get_short_type(self, primitive=False):
+    def get_short_type(self, primitive: bool = False) -> tp.Type:
         return ShortType()
 
-    def get_long_type(self, primitive=False):
+    def get_long_type(self, primitive: bool = False) -> tp.Type:
         return LongType()
 
-    def get_float_type(self, primitive=False):
+    def get_float_type(self, primitive: bool = False) -> tp.Type:
         return FloatType()
 
-    def get_double_type(self, primitive=False):
+    def get_double_type(self, primitive: bool = False) -> tp.Type:
         return DoubleType()
 
-    def get_big_decimal_type(self):
+    def get_big_decimal_type(self) -> tp.Type:
         return DoubleType()
 
-    def get_big_integer_type(self):
+    def get_big_integer_type(self) -> tp.Type:
         return IntegerType()
 
-    def get_boolean_type(self, primitive=False):
+    def get_boolean_type(self, primitive: bool = False) -> tp.Type:
         return BooleanType()
 
-    def get_char_type(self, primitive=False):
+    def get_char_type(self, primitive: bool = False) -> tp.Type:
         return CharType()
 
-    def get_string_type(self):
+    def get_string_type(self) -> tp.Type:
         return StringType()
 
-    def get_array_type(self):
+    def get_array_type(self) -> tp.TypeConstructor:
         return ArrayType()
 
-    def get_function_type(self, nr_parameters=0):
+    def get_function_type(self, nr_parameters: int = 0) -> tp.TypeConstructor:
         return FunctionType(nr_parameters)
 
-    def get_nothing(self):
+    def get_nothing(self) -> tp.Type:
         return NothingType()
 
-    def get_non_nothing_types(self):
+    def get_non_nothing_types(self) -> List[tp.Type]:
         types = super().get_non_nothing_types()
         types.extend([
             SeqType()
