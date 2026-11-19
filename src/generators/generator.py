@@ -327,7 +327,6 @@ class Generator:
         # Check if this function we want to generate is a class method, by
         # checking the name of the outer namespace. If we are in class then
         # the outer namespace begins with capital letter.
-        class_method = self._last_segment(self.namespace[-2])[0].isupper()
         class_method = (False if len(self.namespace) < 2 else
                         self._last_segment(self.namespace[-2])[0].isupper())
         # Check if this function we want to generate is a nested functions.
