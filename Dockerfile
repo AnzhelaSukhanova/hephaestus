@@ -41,6 +41,8 @@
 # Ubuntu 24.04 (noble): python3 is 3.12 (PEP 695 needed); Temurin JDK includes `jar`.
 FROM --platform=linux/amd64 eclipse-temurin:21-jdk-noble AS base
 ENV DEBIAN_FRONTEND=noninteractive
+# The build host has no working IPv6 route: apt would stall on IPv6 addresses first
+RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-venv git ca-certificates tini \
  && rm -rf /var/lib/apt/lists/*
