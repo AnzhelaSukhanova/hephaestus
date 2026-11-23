@@ -28,3 +28,4 @@ build/
 .driver-coverage/
 .module-relocation-validation/
 **/.DS_Store
+/continuous/

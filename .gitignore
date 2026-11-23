@@ -159,3 +159,4 @@ script.sh
 !/tools/investigations/
 /tools/investigations/*
 !/tools/investigations/pickle_investigator.py
+/continuous/
