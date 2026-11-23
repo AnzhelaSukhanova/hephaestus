@@ -54,17 +54,20 @@ ARG KOTLIN_MASTER_VERSION=""
 # installed: Hephaestus uses no other compiler.
 ENV KOTLIN_COMPILERS_HOME=/opt/kotlin-compilers
 WORKDIR /src
-# Only the stdlib-only manager + version list: code changes elsewhere don't re-download compilers.
+# Own venv for the manager: the system Python is externally managed (PEP 668), and layout.py needs
+# the filelock version pyproject.toml declares.
+RUN python3 -m venv /opt/tools && /opt/tools/bin/pip install --no-cache-dir "filelock>=3.30"
+# Only the manager, its filelock and the version list: code changes elsewhere don't re-download compilers.
 COPY versions.json ./
 COPY src/tools/kotlin_compilers/ src/tools/kotlin_compilers/
 # Docker can't see new GitHub releases, so builds use --no-cache (see header).
 RUN echo "master=${KOTLIN_MASTER_VERSION:-<fallback: prerelease>}" \
  && KOTLIN_MASTER_VERSION="${KOTLIN_MASTER_VERSION}" \
-    python3 src/tools/kotlin_compilers/manage.py --host linux-x86_64 sync master \
- && python3 src/tools/kotlin_compilers/manage.py list master \
+    /opt/tools/bin/python src/tools/kotlin_compilers/manage.py --host linux-x86_64 sync master \
+ && /opt/tools/bin/python src/tools/kotlin_compilers/manage.py list master \
  && echo "Installed Kotlin master: $(basename "$(readlink -f "$KOTLIN_COMPILERS_HOME/master")")"
 # Smoke test with networking disabled: proves Native stays first-stage (no LLVM download).
-RUN --network=none python3 src/tools/kotlin_compilers/manage.py check master
+RUN --network=none /opt/tools/bin/python src/tools/kotlin_compilers/manage.py check master
 
 ############################ runtime ############################
 FROM base AS runtime
